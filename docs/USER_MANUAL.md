@@ -1522,6 +1522,43 @@ Or via environment variable for the whole session:
 VOXTYPE_SMART_AUTO_SUBMIT=true voxtype
 ```
 
+**Filter filler words ("uh", "um", ...):**
+
+```toml
+[text]
+filter_filler_words = true
+```
+
+When enabled, Voxtype strips common filler words from each transcription before output and cleans up the surrounding punctuation. Word boundaries are respected, so "umbrella" and "summer" are untouched.
+
+```
+# You say:    "Well, um, I think we should ship it"
+# Voxtype types: "Well, I think we should ship it"
+```
+
+The default list contains single-syllable disfluencies: `uh`, `um`, `er`, `ah`, `eh`, `hmm`, `hm`, `mm`, `mhm`. Override it to add your own words:
+
+```toml
+[text]
+filter_filler_words = true
+filler_words = ["uh", "um", "er", "like", "you know"]
+```
+
+CLI flag (overrides config for the running daemon):
+
+```bash
+voxtype --filter-fillers       # force on
+voxtype --no-filter-fillers    # force off
+```
+
+Or via environment variable:
+
+```bash
+VOXTYPE_FILTER_FILLERS=true voxtype
+```
+
+The filter runs before `replacements` and the `[post_process]` LLM hook, so any custom replacements still apply on top of filtered text.
+
 **Shift+Enter for newlines:**
 
 ```toml
