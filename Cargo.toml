@@ -17,7 +17,7 @@ categories = ["multimedia::audio", "accessibility"]
 tokio = { version = "1", features = ["full", "signal", "sync", "time", "process", "io-util"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Configuration
 serde = { version = "1", features = ["derive"] }
@@ -146,3 +146,7 @@ opt-level = 1  # Faster dev builds, whisper still usable
 [[bin]]
 name = "voxtype"
 path = "src/main.rs"
+
+[[bin]]
+name = "voxtype-osd"
+path = "src/bin/voxtype_osd.rs"
