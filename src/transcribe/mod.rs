@@ -14,9 +14,12 @@
 
 pub mod cli;
 pub mod remote;
+pub mod streaming;
 pub mod subprocess;
 pub mod whisper;
 pub mod worker;
+
+pub use streaming::{SegmentId, StreamHandle, StreamingEvent, StreamingTranscriber};
 
 /// Shared log-mel filterbank feature extraction for ONNX-based ASR engines
 #[cfg(any(
@@ -111,6 +114,16 @@ pub trait Transcriber: Send + Sync {
     /// benefit from preparation, like those with preloaded models).
     fn prepare(&self) {
         // Default: no-op
+    }
+
+    /// Streaming-capable view of this transcriber, if it supports streaming.
+    ///
+    /// Returns `None` by default. Streaming-capable backends override this to
+    /// return `Some(self)` (or some other implementor of [`StreamingTranscriber`]).
+    /// The daemon consults this when `[transcribe] streaming = true` is set in
+    /// config to decide between batch and streaming pipelines.
+    fn as_streaming(&self) -> Option<&dyn StreamingTranscriber> {
+        None
     }
 }
 
