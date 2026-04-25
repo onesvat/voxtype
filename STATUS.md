@@ -52,7 +52,28 @@ shape.
 - Clippy on changed files clean (the workspace has plenty of pre-existing
   clippy lints that aren't ours to fix here).
 
+## Commit 2 — voxtype-osd binary skeleton
+
+Landed: a second `[[bin]]` at `src/bin/voxtype_osd.rs`.
+
+- Connects to the daemon socket, decodes `AudioFrame`s, drops them into a
+  300-entry ring buffer (3 s at 100 Hz).
+- Logs a `tracing::debug!` line every N frames so end-to-end IPC can be
+  verified before any Wayland code lands.
+- Reconnects automatically: when the daemon is down the binary sleeps for
+  `--reconnect-secs` and tries again. EOF on the socket is handled the same
+  way (daemon restart, recording ended cleanly, etc.).
+- Three unit tests on the ring buffer pass.
+- CLI: `--socket`, `--reconnect-secs`, `--log-every`, plus `VOXTYPE_OSD_SOCKET`
+  env var (added the `env` feature to clap).
+
+Smoke check is pending until Pete runs the daemon + OSD side by side. The
+binary builds clean and the IPC types are shared via `voxtype::audio::levels`,
+so a runtime mismatch is impossible.
+
 ## Next
 
-Commit 2: `voxtype-osd` binary skeleton — connect to the socket, decode frames,
-log to stdout. No GUI yet.
+Commit 3: layer-shell window. Open question is whether eframe/egui's winit
+backend handles `wlr-layer-shell` on current upstream, or whether
+`smithay-client-toolkit` + `wgpu` is the right path. Document the choice in
+the commit message and PR description per BRIEF.md.
