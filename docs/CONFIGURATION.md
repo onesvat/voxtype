@@ -1991,6 +1991,60 @@ VOXTYPE_SMART_AUTO_SUBMIT=true voxtype
 
 **Note:** `smart_auto_submit` is conditional - it only fires when you say "submit". The existing `auto_submit` option always presses Enter after every transcription. Use `smart_auto_submit` when you want the choice per dictation, and `auto_submit` when you always want Enter pressed.
 
+### filter_filler_words
+
+**Type:** Boolean
+**Default:** `true`
+**Required:** No
+
+When `true` (the default), strips common filler words ("uh", "um", "er", ...) from each transcription before output. Matching is case-insensitive and respects word boundaries, so words like "umbrella" or "summer" are not affected. Surrounding commas, semicolons, and double spaces are cleaned up so the result reads naturally. Set to `false` to disable.
+
+**Example:**
+
+```toml
+[text]
+filter_filler_words = true
+```
+
+With this enabled:
+
+- "Well, um, I think" becomes "Well, I think"
+- "uh hello world" becomes "hello world"
+- "hello world, uh." becomes "hello world."
+
+**CLI flag:**
+
+```bash
+voxtype --filter-fillers       # force on (overrides config)
+voxtype --no-filter-fillers    # force off (overrides config)
+```
+
+**Environment variable:**
+
+```bash
+VOXTYPE_FILTER_FILLERS=true voxtype
+```
+
+The filter runs before `replacements` and the `[post_process]` LLM hook, so any custom replacements still apply on top of filtered text.
+
+### filler_words
+
+**Type:** Array of strings
+**Default:** `["uh", "um", "er", "ah", "eh", "hmm", "hm", "mm", "mhm"]`
+**Required:** No
+
+Words removed by the filler-word filter. The default list is conservative and includes only single-syllable disfluencies. Override it to add your own (for example "like" or "you know"), or to disable specific entries by replacing the list.
+
+**Example:**
+
+```toml
+[text]
+filter_filler_words = true
+filler_words = ["uh", "um", "er", "like", "you know"]
+```
+
+Multi-word entries like "you know" are matched as a single phrase. Adding aggressive entries (such as "like") may strip legitimate uses of the word; keep the list conservative or disable the filter for technical writing.
+
 ---
 
 ## [vad]
@@ -2518,6 +2572,8 @@ Any config file setting can be overridden via environment variable. These are ap
 | `VOXTYPE_PASTE_KEYS` | string | `output.paste_keys` |
 | `VOXTYPE_DOTOOL_XKB_LAYOUT` | string | `output.dotool_xkb_layout` |
 | `VOXTYPE_SPOKEN_PUNCTUATION` | bool | `text.spoken_punctuation` |
+| `VOXTYPE_SMART_AUTO_SUBMIT` | bool | `text.smart_auto_submit` |
+| `VOXTYPE_FILTER_FILLERS` | bool | `text.filter_filler_words` |
 
 Boolean values: `true`, `1` to enable; `false`, `0` to disable.
 

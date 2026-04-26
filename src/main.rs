@@ -292,6 +292,12 @@ async fn main() -> anyhow::Result<()> {
     if cli.spoken_punctuation {
         config.text.spoken_punctuation = true;
     }
+    if cli.filter_fillers {
+        config.text.filter_filler_words = true;
+    }
+    if cli.no_filter_fillers {
+        config.text.filter_filler_words = false;
+    }
     if let Some(keys) = cli.paste_keys {
         config.output.paste_keys = Some(keys);
     }

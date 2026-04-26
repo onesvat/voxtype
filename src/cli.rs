@@ -291,6 +291,19 @@ pub struct Cli {
     #[arg(long, conflicts_with = "smart_auto_submit", help_heading = "Text Processing", hide_short_help = true)]
     pub no_smart_auto_submit: bool,
 
+    /// Filter common filler words ("uh", "um", "er", ...) from transcribed text
+    #[arg(long, help_heading = "Text Processing")]
+    pub filter_fillers: bool,
+
+    /// Disable filler-word filtering (overrides config)
+    #[arg(
+        long,
+        conflicts_with = "filter_fillers",
+        help_heading = "Text Processing",
+        hide_short_help = true
+    )]
+    pub no_filter_fillers: bool,
+
     /// Text to append after each transcription (e.g., " " for trailing space)
     #[arg(long, value_name = "TEXT", help_heading = "Text Processing", hide_short_help = true,
         long_help = "Text to append after each transcription (e.g., \" \" for a trailing space).\n\
