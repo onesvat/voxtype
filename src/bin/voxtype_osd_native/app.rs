@@ -61,7 +61,13 @@ pub struct SharedState {
 /// How long to keep the surface alive after the last frame arrived, before
 /// destroying it. The daemon stops emitting between recordings; this value
 /// controls how quickly the OSD disappears after that.
-const IDLE_TEARDOWN_SECS: f32 = 5.0;
+/// Idle threshold for tearing down the layer-shell + wgpu surface. Set
+/// short enough that the OSD disappears immediately when the user releases
+/// the hotkey, but long enough that the destroy+recreate cost on the next
+/// recording isn't visible. 0.5s is the sweet spot: humans perceive sub-
+/// second as "instant," and 0.5s is well above the recording boundary
+/// gaps the daemon naturally produces.
+const IDLE_TEARDOWN_SECS: f32 = 0.5;
 /// Target render rate. 60 Hz is enough for a smooth scrolling waveform; we
 /// can't render faster than the underlying frame rate (100 Hz IPC) gains us.
 const REDRAW_INTERVAL_MS: u64 = 16;
@@ -408,6 +414,7 @@ impl App {
 
         let width_px = rs.width;
         let height_px = rs.height;
+        let gain = self.shared.config.waveform_gain;
         let full_output = rs.egui_ctx.run_ui(raw_input, |ui| {
             draw_ui(
                 ui,
@@ -417,6 +424,7 @@ impl App {
                 &envelope_cols,
                 peak_dbfs,
                 held_dbfs,
+                gain,
             );
         });
 
@@ -525,6 +533,7 @@ fn draw_ui(
     envelope: &[EnvelopeColumn],
     peak_dbfs: f32,
     held_dbfs: f32,
+    gain: f32,
 ) {
     use egui::{Pos2, Rect};
     let painter = ui.painter().clone();
@@ -535,7 +544,7 @@ fn draw_ui(
     let waveform_rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(waveform_w, h));
     let meter_rect = Rect::from_min_size(Pos2::new(w - meter_w, 0.0), egui::vec2(meter_w, h));
 
-    draw_waveform(&painter, waveform_rect, palette, envelope);
+    draw_waveform(&painter, waveform_rect, palette, envelope, gain);
     draw_meter(&painter, meter_rect, palette, peak_dbfs, held_dbfs);
 }
 
@@ -544,6 +553,7 @@ fn draw_waveform(
     rect: egui::Rect,
     palette: &Palette,
     envelope: &[EnvelopeColumn],
+    gain: f32,
 ) {
     use egui::{pos2, Shape};
     if envelope.is_empty() {
@@ -558,9 +568,10 @@ fn draw_waveform(
     let mut bot_pts = Vec::with_capacity(n);
     for (i, col) in envelope.iter().enumerate() {
         let x = rect.left() + (i as f32 + 0.5) * col_w;
-        // min/max are in -1.0..=1.0; map to pixel y. y grows downward.
-        let top = mid_y - col.max.clamp(-1.0, 1.0) * half_h;
-        let bot = mid_y - col.min.clamp(-1.0, 1.0) * half_h;
+        // Apply visual gain, then clamp to -1.0..=1.0, then map to pixel y.
+        // y grows downward so we subtract from mid_y for the top edge.
+        let top = mid_y - (col.max * gain).clamp(-1.0, 1.0) * half_h;
+        let bot = mid_y - (col.min * gain).clamp(-1.0, 1.0) * half_h;
         top_pts.push(pos2(x, top));
         bot_pts.push(pos2(x, bot));
     }

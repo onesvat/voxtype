@@ -44,6 +44,11 @@ use crate::app::SharedState;
     about = "Voxtype on-screen mic visualizer (native: SCTK + wgpu + egui-wgpu)"
 )]
 struct Args {
+    /// Path to the voxtype config file. Defaults to
+    /// `~/.config/voxtype/config.toml`. Only the `[osd]` section is read.
+    #[arg(long, env = "VOXTYPE_CONFIG")]
+    config: Option<PathBuf>,
+
     /// Path to the audio-frame Unix socket. Defaults to
     /// `$XDG_RUNTIME_DIR/voxtype/audio.sock`.
     #[arg(long, env = "VOXTYPE_OSD_SOCKET")]
@@ -65,9 +70,46 @@ struct Args {
     #[arg(long, env = "VOXTYPE_OSD_HEIGHT")]
     height_px: Option<u32>,
 
+    /// Margin from the screen edge in pixels (overrides config default).
+    #[arg(long, env = "VOXTYPE_OSD_MARGIN")]
+    margin_px: Option<u32>,
+
     /// Background opacity 0.0..=1.0 (overrides config default).
     #[arg(long, env = "VOXTYPE_OSD_OPACITY")]
     opacity: Option<f32>,
+
+    /// Visual gain applied to audio samples before drawing the waveform.
+    /// Higher = waveform fills more of the vertical for quiet inputs.
+    /// Reduce for hot mics (e.g. 4.0); raise for quiet sources (e.g. 14.0).
+    #[arg(long, env = "VOXTYPE_OSD_GAIN")]
+    waveform_gain: Option<f32>,
+}
+
+/// Load the `[osd]` section from the voxtype config file, falling back to
+/// `OsdConfig::default()` on any error (file missing, unreadable, parse
+/// failure, or `[osd]` section absent).
+fn load_osd_config_from_file(explicit: Option<&std::path::Path>) -> OsdConfig {
+    let path = explicit
+        .map(std::path::Path::to_path_buf)
+        .or_else(voxtype::config::Config::default_path);
+    let Some(path) = path else {
+        return OsdConfig::default();
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return OsdConfig::default(),
+    };
+
+    #[derive(serde::Deserialize, Default)]
+    struct PartialConfig {
+        #[serde(default)]
+        osd: Option<OsdConfig>,
+    }
+
+    match toml::from_str::<PartialConfig>(&content) {
+        Ok(p) => p.osd.unwrap_or_default(),
+        Err(_) => OsdConfig::default(),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -81,15 +123,22 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let socket_path = resolve_socket_path(args.socket.clone());
 
-    let mut osd_config = OsdConfig::default();
+    // Layer config: defaults < config file [osd] < CLI/env overrides.
+    let mut osd_config = load_osd_config_from_file(args.config.as_deref());
     if let Some(w) = args.width_px {
         osd_config.width_px = w;
     }
     if let Some(h) = args.height_px {
         osd_config.height_px = h;
     }
+    if let Some(m) = args.margin_px {
+        osd_config.margin_px = m;
+    }
     if let Some(o) = args.opacity {
         osd_config.opacity = o.clamp(0.0, 1.0);
+    }
+    if let Some(g) = args.waveform_gain {
+        osd_config.waveform_gain = g;
     }
 
     if !osd_config.enabled {
