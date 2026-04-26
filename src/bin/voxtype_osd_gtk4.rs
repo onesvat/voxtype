@@ -28,10 +28,43 @@ use gtk4::{Application, ApplicationWindow, DrawingArea};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use voxtype::audio::levels::{AudioFrame, FRAME_HZ};
+use voxtype::config::Config as VoxtypeConfig;
 use voxtype::osd::config::{OsdConfig, OsdPosition};
 use voxtype::osd::ipc::{resolve_socket_path, run_ipc_loop, FrameRing, DEFAULT_RING_DEPTH};
 use voxtype::osd::theme::ThemeWatcher;
 use voxtype::osd::visual::{peak_meter_fraction, project_envelope, MeterZone, Palette, PeakHold};
+
+/// Load the `[osd]` section from the voxtype config file, falling back to
+/// `OsdConfig::default()` on any error (file missing, unreadable, parse
+/// failure, or `[osd]` section absent).
+///
+/// We deliberately ignore parse errors instead of returning them: the OSD
+/// is a side car, and a malformed config shouldn't prevent it from running
+/// with sensible defaults — the user will see the daemon complain about
+/// the same file separately.
+fn load_osd_config_from_file(explicit: Option<&std::path::Path>) -> OsdConfig {
+    let path = explicit
+        .map(std::path::Path::to_path_buf)
+        .or_else(VoxtypeConfig::default_path);
+    let Some(path) = path else {
+        return OsdConfig::default();
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return OsdConfig::default(),
+    };
+
+    #[derive(serde::Deserialize, Default)]
+    struct PartialConfig {
+        #[serde(default)]
+        osd: Option<OsdConfig>,
+    }
+
+    match toml::from_str::<PartialConfig>(&content) {
+        Ok(p) => p.osd.unwrap_or_default(),
+        Err(_) => OsdConfig::default(),
+    }
+}
 
 /// Application id for the GTK4 frontend.
 const APP_ID: &str = "io.voxtype.OsdGtk4";
@@ -42,7 +75,7 @@ const RENDER_TICK_MS: u32 = 16;
 
 /// How long we wait without frames before treating the daemon as idle and
 /// hiding the surface. Matches the BRIEF's "Idle: surface destroyed" rule.
-const IDLE_TIMEOUT_SECS: f32 = 5.0;
+const IDLE_TIMEOUT_SECS: f32 = 0.15;
 
 /// Number of segments in the vertical peak meter.
 const METER_SEGMENTS: usize = 10;
@@ -57,6 +90,11 @@ const METER_FLOOR_DBFS: f32 = -60.0;
     about = "Voxtype on-screen mic visualizer (GTK4 + gtk4-layer-shell)"
 )]
 struct Args {
+    /// Path to the voxtype config file. Defaults to
+    /// `~/.config/voxtype/config.toml`. Only the `[osd]` section is read.
+    #[arg(long, env = "VOXTYPE_CONFIG")]
+    config: Option<PathBuf>,
+
     /// Path to the audio-frame Unix socket. Defaults to
     /// `$XDG_RUNTIME_DIR/voxtype/audio.sock`.
     #[arg(long, env = "VOXTYPE_OSD_SOCKET")]
@@ -85,6 +123,12 @@ struct Args {
     /// Margin from the screen edge in physical pixels.
     #[arg(long, env = "VOXTYPE_OSD_MARGIN")]
     margin_px: Option<u32>,
+
+    /// Visual gain applied to audio samples before drawing the waveform.
+    /// Higher = waveform fills more of the vertical for quiet inputs.
+    /// Reduce for hot mics (e.g. 4.0); raise for quiet sources (e.g. 14.0).
+    #[arg(long, env = "VOXTYPE_OSD_GAIN")]
+    waveform_gain: Option<f32>,
 }
 
 /// State shared between the IPC worker and the GTK redraw timer.
@@ -117,8 +161,8 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let socket_path = resolve_socket_path(args.socket.clone());
 
-    // Resolve OSD config defaults plus CLI overrides.
-    let mut osd_cfg = OsdConfig::default();
+    // Layer config: defaults < config file [osd] < CLI/env overrides.
+    let mut osd_cfg = load_osd_config_from_file(args.config.as_deref());
     if let Some(w) = args.width_px {
         osd_cfg.width_px = w;
     }
@@ -128,6 +172,12 @@ fn main() -> anyhow::Result<()> {
     if let Some(m) = args.margin_px {
         osd_cfg.margin_px = m;
     }
+    if let Some(g) = args.waveform_gain {
+        osd_cfg.waveform_gain = g;
+    }
+    // peak_decay_db_per_sec has a clap default value, so this always
+    // overrides whatever the file said. That's intentional: if the user
+    // passes the flag, honor it; if they don't, the clap default kicks in.
     osd_cfg.peak_decay_db_per_sec = args.peak_decay_db_per_sec;
 
     tracing::info!(
@@ -291,8 +341,9 @@ fn build_window(app: &Application, cfg: &OsdConfig, palette: Palette, state: Arc
     drawing_area.set_content_width(cfg.width_px as i32);
     drawing_area.set_content_height(cfg.height_px as i32);
     let state_for_draw = state.clone();
+    let gain = cfg.waveform_gain as f64;
     drawing_area.set_draw_func(move |_area, cr, w, h| {
-        draw(cr, w, h, &palette, &state_for_draw);
+        draw(cr, w, h, &palette, &state_for_draw, gain);
     });
     window.set_child(Some(&drawing_area));
 
@@ -324,6 +375,7 @@ fn build_window(app: &Application, cfg: &OsdConfig, palette: Palette, state: Arc
 
         if idle {
             if visible.get() {
+                tracing::info!("hiding (idle for {:.2}s)", last_at.elapsed().as_secs_f32());
                 redraw_window.set_visible(false);
                 visible.set(false);
             }
@@ -331,6 +383,11 @@ fn build_window(app: &Application, cfg: &OsdConfig, palette: Palette, state: Arc
         }
 
         if !visible.get() {
+            tracing::info!(
+                "showing (frame seq={}, last_at={:.3}s ago)",
+                cur_seq,
+                last_at.elapsed().as_secs_f32()
+            );
             redraw_window.set_visible(true);
             visible.set(true);
         }
@@ -362,11 +419,11 @@ fn build_window(app: &Application, cfg: &OsdConfig, palette: Palette, state: Arc
         glib::ControlFlow::Continue
     });
 
-    // Start hidden; the redraw timer will reveal once frames arrive.
-    window.set_visible(false);
+    // Map the layer-shell surface once. The redraw timer will hide it
+    // immediately on its first tick (no frames yet → idle), and toggle
+    // visibility from there. Mapping once at startup keeps Hyprland's
+    // layer-shell state machine happy across hide/show cycles.
     window.present();
-    // Re-hide right after present to avoid a one-frame flash on startup.
-    window.set_visible(false);
 }
 
 /// Set an empty input region on the GdkSurface so clicks pass through.
@@ -380,7 +437,14 @@ fn apply_click_through(window: &ApplicationWindow) {
 }
 
 /// Render the waveform + peak meter into the given Cairo context.
-fn draw(cr: &Context, width: i32, height: i32, palette: &Palette, state: &Arc<SharedState>) {
+fn draw(
+    cr: &Context,
+    width: i32,
+    height: i32,
+    palette: &Palette,
+    state: &Arc<SharedState>,
+    gain: f64,
+) {
     let w = width as f64;
     let h = height as f64;
     if w <= 0.0 || h <= 0.0 {
@@ -404,7 +468,7 @@ fn draw(cr: &Context, width: i32, height: i32, palette: &Palette, state: &Arc<Sh
     let gap = (w * 0.01).max(2.0);
     let wave_width = (w - meter_width - gap).max(0.0);
 
-    draw_waveform(cr, 0.0, 0.0, wave_width, h, palette, state);
+    draw_waveform(cr, 0.0, 0.0, wave_width, h, palette, state, gain);
     draw_peak_meter(cr, wave_width + gap, 0.0, meter_width, h, palette, state);
 }
 
@@ -416,6 +480,7 @@ fn draw_waveform(
     h: f64,
     palette: &Palette,
     state: &Arc<SharedState>,
+    gain: f64,
 ) {
     if w < 1.0 {
         return;
@@ -448,7 +513,7 @@ fn draw_waveform(
     // Top edge.
     for (i, col) in cols.iter().enumerate() {
         let px = x + i as f64 + 0.5;
-        let py = mid - sample_to_pixels(col.max, half);
+        let py = mid - sample_to_pixels(col.max, half, gain);
         if i == 0 {
             cr.move_to(px, py);
         } else {
@@ -458,7 +523,7 @@ fn draw_waveform(
     // Bottom edge, right-to-left.
     for (i, col) in cols.iter().enumerate().rev() {
         let px = x + i as f64 + 0.5;
-        let py = mid - sample_to_pixels(col.min, half);
+        let py = mid - sample_to_pixels(col.min, half, gain);
         cr.line_to(px, py);
     }
     cr.close_path();
@@ -477,9 +542,9 @@ fn draw_waveform(
     cr.stroke().ok();
 }
 
-fn sample_to_pixels(sample: f32, half_height: f64) -> f64 {
-    // Samples are -1.0..=1.0; clamp + scale.
-    let s = sample.clamp(-1.0, 1.0) as f64;
+fn sample_to_pixels(sample: f32, half_height: f64, gain: f64) -> f64 {
+    // Apply visual gain, then clamp to -1.0..=1.0, then scale to half_height.
+    let s = (sample as f64 * gain).clamp(-1.0, 1.0);
     s * half_height
 }
 
