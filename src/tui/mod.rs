@@ -5,10 +5,14 @@
 //! ship as placeholders and will be filled in over subsequent PRs.
 
 mod app;
+mod config_editor;
 mod general;
 mod section;
 mod sidebar;
 mod stub;
+
+#[allow(unused_imports)]
+pub(crate) use config_editor::{ConfigEditor, EditorError};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers},
