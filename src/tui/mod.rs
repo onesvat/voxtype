@@ -5,6 +5,7 @@
 //! ship as placeholders and will be filled in over subsequent PRs.
 
 mod app;
+mod audio;
 mod config_editor;
 mod general;
 mod hotkey;
@@ -175,6 +176,7 @@ fn handle_section_key(app: &mut App, key: KeyEvent) -> Action {
     match app.current_section {
         Section::General => general::handle_key(app, key),
         Section::Hotkey => hotkey::handle_key(app, key),
+        Section::Audio => audio::handle_key(app, key),
         // Stub sections accept no input today.
         _ => Action::None,
     }
@@ -232,6 +234,7 @@ fn render_section(f: &mut Frame, area: Rect, app: &App) {
     match app.current_section {
         Section::General => general::render(f, area, app),
         Section::Hotkey => hotkey::render(f, area, app),
+        Section::Audio => audio::render(f, area, app),
         other => stub::render(f, area, other),
     }
 }

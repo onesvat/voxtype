@@ -103,11 +103,29 @@ impl ConfigEditor {
 
     /// Remove a key from a table (no-op if absent).
     pub fn unset(&mut self, table: &str, key: &str) {
-        if let Some(t) = self.document.get_mut(table).and_then(|i| i.as_table_mut()) {
+        if let Some(t) = self.table_mut(table) {
             if t.remove(key).is_some() {
                 self.dirty = true;
             }
         }
+    }
+
+    fn table_mut(&mut self, dotted: &str) -> Option<&mut toml_edit::Table> {
+        let mut current = self.document.as_table_mut();
+        for segment in dotted.split('.') {
+            current = current
+                .get_mut(segment)
+                .and_then(|i| i.as_table_mut())?;
+        }
+        Some(current)
+    }
+
+    fn table(&self, dotted: &str) -> Option<&toml_edit::Table> {
+        let mut current = self.document.as_table();
+        for segment in dotted.split('.') {
+            current = current.get(segment).and_then(|i| i.as_table())?;
+        }
+        Some(current)
     }
 
     pub fn get_string(&self, table: &str, key: &str) -> Option<String> {
@@ -123,21 +141,40 @@ impl ConfigEditor {
     }
 
     fn value(&self, table: &str, key: &str) -> Option<&Value> {
-        self.document
-            .get(table)
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get(key))
-            .and_then(|i| i.as_value())
+        self.table(table)?.get(key).and_then(|i| i.as_value())
     }
 
-    /// Ensure a `[table]` exists at the document root and return a mutable
-    /// reference to it.
-    fn ensure_table(&mut self, table: &str) -> &mut Item {
-        if !self.document.contains_table(table) {
-            self.document
-                .insert(table, Item::Table(toml_edit::Table::new()));
+    /// Ensure a (possibly dotted) `[table]` path exists and return it as a
+    /// mutable Item. Creates intermediate tables as needed.
+    fn ensure_table(&mut self, dotted: &str) -> &mut Item {
+        let segments: Vec<&str> = dotted.split('.').collect();
+        let (last, rest) = segments
+            .split_last()
+            .expect("ensure_table called with empty path");
+
+        // Walk through (or create) intermediate tables.
+        let mut current: &mut toml_edit::Table = self.document.as_table_mut();
+        for segment in rest {
+            if !current
+                .get(segment)
+                .map(|i| i.is_table())
+                .unwrap_or(false)
+            {
+                current.insert(segment, Item::Table(toml_edit::Table::new()));
+            }
+            current = current[segment]
+                .as_table_mut()
+                .expect("just inserted a table");
         }
-        &mut self.document[table]
+
+        if !current
+            .get(last)
+            .map(|i| i.is_table())
+            .unwrap_or(false)
+        {
+            current.insert(last, Item::Table(toml_edit::Table::new()));
+        }
+        &mut current[last]
     }
 
     /// Atomically write the document and validate it parses through the

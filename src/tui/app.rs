@@ -3,6 +3,7 @@
 use crate::setup::binary::{self, Acceleration, EngineFamily, InstallKind, Inventory, Variant};
 use std::path::Path;
 
+use super::audio::AudioState;
 use super::hotkey::HotkeyState;
 use super::section::Section;
 
@@ -52,6 +53,7 @@ pub struct App {
     /// Lazily loaded Hotkey section state. None until the user opens Hotkey
     /// for the first time (or load fails).
     pub hotkey: Option<HotkeyState>,
+    pub audio: Option<AudioState>,
 }
 
 /// Build the inventory and, if `force_package_mode` is set, override the
@@ -113,13 +115,20 @@ impl App {
             sidebar_cursor: 0,
             sidebar_focused: true,
             hotkey: None,
+            audio: None,
         }
     }
 
     /// Ensure section-specific state is loaded the first time a section opens.
     pub fn ensure_section_loaded(&mut self) {
-        if self.current_section == Section::Hotkey && self.hotkey.is_none() {
-            self.hotkey = HotkeyState::load().ok();
+        match self.current_section {
+            Section::Hotkey if self.hotkey.is_none() => {
+                self.hotkey = HotkeyState::load().ok();
+            }
+            Section::Audio if self.audio.is_none() => {
+                self.audio = AudioState::load().ok();
+            }
+            _ => {}
         }
     }
 
