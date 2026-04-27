@@ -7,9 +7,14 @@ use super::audio::AudioState;
 use super::engine::EngineState;
 use super::hotkey::HotkeyState;
 use super::models_section::ModelsState;
+use super::advanced_section::AdvancedState;
+use super::meeting_section::MeetingState;
+use super::notifications_section::NotificationsState;
 use super::output_section::OutputState;
 use super::section::Section;
 use super::text_section::TextState;
+use super::vad_section::VadState;
+use super::waybar_section::WaybarState;
 
 /// What the event handler asks the run-loop to do next.
 pub enum Action {
@@ -62,6 +67,11 @@ pub struct App {
     pub engine: Option<EngineState>,
     pub output: Option<OutputState>,
     pub text: Option<TextState>,
+    pub vad: Option<VadState>,
+    pub meeting: Option<MeetingState>,
+    pub notifications: Option<NotificationsState>,
+    pub waybar: Option<WaybarState>,
+    pub advanced: Option<AdvancedState>,
 }
 
 /// Build the inventory and, if `force_package_mode` is set, override the
@@ -128,6 +138,11 @@ impl App {
             engine: None,
             output: None,
             text: None,
+            vad: None,
+            meeting: None,
+            notifications: None,
+            waybar: None,
+            advanced: None,
         }
     }
 
@@ -151,6 +166,21 @@ impl App {
             }
             Section::Text if self.text.is_none() => {
                 self.text = TextState::load().ok();
+            }
+            Section::Vad if self.vad.is_none() => {
+                self.vad = VadState::load().ok();
+            }
+            Section::Meeting if self.meeting.is_none() => {
+                self.meeting = MeetingState::load().ok();
+            }
+            Section::Notifications if self.notifications.is_none() => {
+                self.notifications = NotificationsState::load().ok();
+            }
+            Section::Waybar if self.waybar.is_none() => {
+                self.waybar = WaybarState::load().ok();
+            }
+            Section::Advanced if self.advanced.is_none() => {
+                self.advanced = AdvancedState::load().ok();
             }
             _ => {}
         }

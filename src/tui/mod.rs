@@ -12,11 +12,16 @@ mod engine;
 mod general;
 mod hotkey;
 mod models_section;
+mod advanced_section;
+mod meeting_section;
+mod notifications_section;
 mod output_section;
 mod section;
 mod sidebar;
 mod stub;
 mod text_section;
+mod vad_section;
+mod waybar_section;
 
 #[allow(unused_imports)]
 pub(crate) use config_editor::{ConfigEditor, EditorError};
@@ -186,8 +191,11 @@ fn handle_section_key(app: &mut App, key: KeyEvent) -> Action {
         Section::Engine => engine::handle_key(app, key),
         Section::Output => output_section::handle_key(app, key),
         Section::Text => text_section::handle_key(app, key),
-        // Stub sections accept no input today.
-        _ => Action::None,
+        Section::Vad => vad_section::handle_key(app, key),
+        Section::Meeting => meeting_section::handle_key(app, key),
+        Section::Notifications => notifications_section::handle_key(app, key),
+        Section::Waybar => waybar_section::handle_key(app, key),
+        Section::Advanced => advanced_section::handle_key(app, key),
     }
 }
 
@@ -248,7 +256,11 @@ fn render_section(f: &mut Frame, area: Rect, app: &App) {
         Section::Engine => engine::render(f, area, app),
         Section::Output => output_section::render(f, area, app),
         Section::Text => text_section::render(f, area, app),
-        other => stub::render(f, area, other),
+        Section::Vad => vad_section::render(f, area, app),
+        Section::Meeting => meeting_section::render(f, area, app),
+        Section::Notifications => notifications_section::render(f, area, app),
+        Section::Waybar => waybar_section::render(f, area, app),
+        Section::Advanced => advanced_section::render(f, area, app),
     }
 }
 
