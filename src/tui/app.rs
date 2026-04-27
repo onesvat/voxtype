@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::audio::AudioState;
 use super::hotkey::HotkeyState;
+use super::models_section::ModelsState;
 use super::section::Section;
 
 /// What the event handler asks the run-loop to do next.
@@ -54,6 +55,7 @@ pub struct App {
     /// for the first time (or load fails).
     pub hotkey: Option<HotkeyState>,
     pub audio: Option<AudioState>,
+    pub models: Option<ModelsState>,
 }
 
 /// Build the inventory and, if `force_package_mode` is set, override the
@@ -116,6 +118,7 @@ impl App {
             sidebar_focused: true,
             hotkey: None,
             audio: None,
+            models: None,
         }
     }
 
@@ -127,6 +130,9 @@ impl App {
             }
             Section::Audio if self.audio.is_none() => {
                 self.audio = AudioState::load().ok();
+            }
+            Section::Models if self.models.is_none() => {
+                self.models = ModelsState::load().ok();
             }
             _ => {}
         }

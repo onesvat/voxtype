@@ -112,6 +112,9 @@ impl ConfigEditor {
 
     fn table_mut(&mut self, dotted: &str) -> Option<&mut toml_edit::Table> {
         let mut current = self.document.as_table_mut();
+        if dotted.is_empty() {
+            return Some(current);
+        }
         for segment in dotted.split('.') {
             current = current
                 .get_mut(segment)
@@ -122,6 +125,9 @@ impl ConfigEditor {
 
     fn table(&self, dotted: &str) -> Option<&toml_edit::Table> {
         let mut current = self.document.as_table();
+        if dotted.is_empty() {
+            return Some(current);
+        }
         for segment in dotted.split('.') {
             current = current.get(segment).and_then(|i| i.as_table())?;
         }
