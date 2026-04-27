@@ -397,7 +397,7 @@ fn guidance_enabled<'a>(state: &'a HotkeyState) -> Vec<Line<'a>> {
         )));
         for b in &bindings {
             lines.push(Line::from(format!(
-                "  • [{}] {}  →  voxtype record {}",
+                "  • [{}] {}  →  voxtype {}",
                 b.compositor, b.keys, b.action
             )));
         }
@@ -409,6 +409,32 @@ fn guidance_enabled<'a>(state: &'a HotkeyState) -> Vec<Line<'a>> {
             Style::default().fg(Color::Red),
         )));
         lines.push(Line::from(""));
+    }
+
+    let suggestions = compositor_bindings::suggest_missing(&bindings);
+    if !suggestions.is_empty() {
+        let comp = compositor_bindings::dominant_compositor(&bindings);
+        lines.push(Line::from(Span::styled(
+            format!("Suggested additions ({} format)", comp.name()),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        for s in &suggestions {
+            lines.push(Line::from(Span::styled(
+                format!("  ▸ {}", s.label),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(format!("    {}", s.purpose)));
+            for cfg in &s.config_lines {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", cfg),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+            lines.push(Line::from(""));
+        }
     }
 
     if !state.enabled {
