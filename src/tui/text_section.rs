@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
-use super::common::{self, FeedbackLevel};
+use super::common::{self, FeedbackLevel, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -119,13 +119,12 @@ fn count_replacements(ed: &ConfigEditor) -> usize {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Text");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
     let state = match &app.text {
         Some(s) => s,
         None => {
+            let block = Block::default().borders(Borders::ALL).title("Text");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
             f.render_widget(
                 Paragraph::new("Failed to load config; check ~/.config/voxtype/config.toml.")
                     .wrap(Wrap { trim: true }),
@@ -135,71 +134,92 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(2),
-            Constraint::Length(4),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    if let Some((lvl, msg)) = &state.feedback {
-        common::render_feedback(f, chunks[0], *lvl, msg);
-    }
-    common::render_section_header(f, chunks[1], "Text", state.dirty_since_load);
-
-    let rows = [
-        (
-            Field::SpokenPunctuation,
+    let rows = vec![
+        FormRowSpec::new(
+            state.field == Field::SpokenPunctuation,
             "Spoken punctuation conversion",
             yesno(state.spoken_punctuation),
         ),
-        (
-            Field::SmartAutoSubmit,
+        FormRowSpec::new(
+            state.field == Field::SmartAutoSubmit,
             "Smart auto-submit on \"submit\"",
             yesno(state.smart_auto_submit),
         ),
     ];
-    let lines: Vec<Line> = rows
-        .iter()
-        .map(|(field, label, value)| common::form_row(*field == state.field, label, value))
-        .collect();
-    f.render_widget(Paragraph::new(lines), chunks[2]);
 
-    let help = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tips",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(
-            "  • Spoken punctuation maps words like \"period\", \"comma\", \"question mark\" \
-             to their symbols.",
-        ),
-        Line::from(
-            "  • Smart auto-submit watches for \"submit\" at the end of a recording and \
-             presses Enter (the word is stripped from the output).",
-        ),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!(
-                "Custom replacements: edit [text.replacements] in {} \
-                 (inline editing arrives in a future release).",
-                "~/.config/voxtype/config.toml"
-            ),
-            Style::default().fg(Color::Gray),
-        )),
-    ];
-    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }), chunks[3]);
+    let feedback_pair = state
+        .feedback
+        .as_ref()
+        .map(|(lvl, msg)| (*lvl, msg.as_str()));
 
-    common::render_bottom_hint(f, chunks[4], state.dirty_since_load);
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Text",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance_for_field(state),
+    );
 }
 
 fn yesno(b: bool) -> String {
     (if b { "yes" } else { "no" }).to_string()
+}
+
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn guidance_for_field(state: &TextState) -> Vec<Line<'_>> {
+    match state.field {
+        Field::SpokenPunctuation => vec![
+            heading("Spoken punctuation conversion"),
+            Line::from(""),
+            Line::from(
+                "Maps words like \"period\", \"comma\", \"question mark\", \
+                 \"new line\", \"colon\" to their symbol equivalents in the \
+                 transcript.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Useful when the transcription model can't reliably punctuate \
+                 from prosody alone (smaller Whisper models, accented \
+                 speech).",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Trade-off: if you legitimately want to dictate the word \
+                 \"period\", you'll need to drop this off temporarily.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+        Field::SmartAutoSubmit => vec![
+            heading("Smart auto-submit"),
+            Line::from(""),
+            Line::from(
+                "Watches for the word \"submit\" at the end of a recording. \
+                 If found, voxtype strips it from the output and presses \
+                 Enter.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Use this with [output] auto_submit = false: most of your \
+                 dictations don't auto-send, but ending with \"submit\" \
+                 explicitly fires Enter.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Better for chat where some messages need editing first.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {

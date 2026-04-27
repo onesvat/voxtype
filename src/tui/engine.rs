@@ -6,7 +6,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
+use super::common::{self, FeedbackLevel as CommonFeedback, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -228,13 +229,12 @@ impl EngineState {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Engine");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
     let state = match &app.engine {
         Some(s) => s,
         None => {
+            let block = Block::default().borders(Borders::ALL).title("Engine");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
             f.render_widget(
                 Paragraph::new("Failed to load config; check ~/.config/voxtype/config.toml.")
                     .wrap(Wrap { trim: true }),
@@ -245,6 +245,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
 
     if state.engine != "whisper" {
+        let block = Block::default().borders(Borders::ALL).title("Engine");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
         let lines = vec![
             Line::from(Span::styled(
                 format!("Active engine: {}", state.engine),
@@ -265,176 +268,229 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(3), // header
-            Constraint::Length(10), // form
-            Constraint::Min(0),    // help
-            Constraint::Length(1), // hint
-        ])
-        .split(inner);
-
-    if let Some(fb) = &state.feedback {
-        render_feedback(f, chunks[0], fb);
-    }
-    render_header(f, chunks[1], state);
-    render_form(f, chunks[2], state);
-    render_help(f, chunks[3]);
-    render_hint(f, chunks[4], state);
-}
-
-fn render_feedback(f: &mut Frame, area: Rect, fb: &Feedback) {
-    let style = match fb.level {
-        FeedbackLevel::Ok => Style::default().fg(Color::Green),
-        FeedbackLevel::Err => Style::default().fg(Color::Red),
-    };
-    let prefix = match fb.level {
-        FeedbackLevel::Ok => "✓ ",
-        FeedbackLevel::Err => "✗ ",
-    };
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("{}{}", prefix, fb.message),
-            style,
-        ))),
-        area,
-    );
-}
-
-fn render_header(f: &mut Frame, area: Rect, state: &EngineState) {
-    let dirty = if state.dirty_since_load {
-        Span::styled("  • unsaved", Style::default().fg(Color::Yellow))
-    } else {
-        Span::raw("")
-    };
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Whisper",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            dirty,
-        ]),
-        Line::from(""),
-    ];
-    f.render_widget(Paragraph::new(lines), area);
-}
-
-fn render_form(f: &mut Frame, area: Rect, state: &EngineState) {
     let w = &state.whisper;
-    let rows = [
-        (WField::Mode, "Execution mode", w.mode.clone()),
-        (WField::Language, "Language", w.language.clone()),
-        (WField::Translate, "Translate to English", yesno(w.translate)),
-        (
-            WField::Threads,
+    let rows = vec![
+        FormRowSpec::new(state.field == WField::Mode, "Execution mode", &w.mode),
+        FormRowSpec::new(state.field == WField::Language, "Language", &w.language),
+        FormRowSpec::new(
+            state.field == WField::Translate,
+            "Translate to English",
+            yesno(w.translate),
+        ),
+        FormRowSpec::new(
+            state.field == WField::Threads,
             "Threads",
             w.threads
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "auto".to_string()),
         ),
-        (
-            WField::Prompt,
+        FormRowSpec::new(
+            state.field == WField::Prompt,
             "Initial prompt",
             w.initial_prompt
-                .clone()
+                .as_deref()
                 .map(|s| {
-                    if s.len() > 40 {
-                        format!("{}…", &s[..40])
+                    if s.len() > 30 {
+                        format!("{}…", &s[..30])
                     } else {
-                        s
+                        s.to_string()
                     }
                 })
                 .unwrap_or_else(|| "(none)".to_string()),
         ),
-        (
-            WField::FlashAttention,
+        FormRowSpec::new(
+            state.field == WField::FlashAttention,
             "Flash attention",
             yesno(w.flash_attention),
         ),
-        (
-            WField::OnDemandLoading,
+        FormRowSpec::new(
+            state.field == WField::OnDemandLoading,
             "On-demand model loading",
             yesno(w.on_demand_loading),
         ),
-        (
-            WField::GpuIsolation,
+        FormRowSpec::new(
+            state.field == WField::GpuIsolation,
             "GPU isolation (subprocess)",
             yesno(w.gpu_isolation),
         ),
     ];
 
-    let lines: Vec<Line> = rows
-        .iter()
-        .map(|(field, label, value)| {
-            let focused = *field == state.field;
-            let label_style = if focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let value_style = if focused {
-                Style::default().bg(Color::DarkGray).fg(Color::White)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let prefix = if focused { "▸ " } else { "  " };
-            Line::from(vec![
-                Span::styled(format!("{}{:<28}", prefix, label), label_style),
-                Span::styled(format!(" ◂ {} ▸", value), value_style),
-            ])
-        })
-        .collect();
-    f.render_widget(Paragraph::new(lines), area);
+    let feedback_pair = state.feedback.as_ref().map(|fb| {
+        (
+            match fb.level {
+                FeedbackLevel::Ok => CommonFeedback::Ok,
+                FeedbackLevel::Err => CommonFeedback::Err,
+            },
+            fb.message.as_str(),
+        )
+    });
+
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Whisper engine",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance_for_field(state),
+    );
 }
 
 fn yesno(b: bool) -> String {
     (if b { "yes" } else { "no" }).to_string()
 }
 
-fn render_help(f: &mut Frame, area: Rect) {
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tips",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(
-            "  • mode = remote: transcribe via an OpenAI-compatible HTTP API. \
-             Configure remote_endpoint / remote_api_key separately.",
-        ),
-        Line::from(
-            "  • Initial prompt cycles between (none) and a sample. Inline text \
-             editing of the prompt arrives in a future release; for now edit \
-             the prompt in config.toml directly.",
-        ),
-        Line::from(
-            "  • GPU isolation runs each transcription in a subprocess that \
-             exits afterward. Eliminates VRAM creep at the cost of model \
-             load time on every recording.",
-        ),
-    ];
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
 
-fn render_hint(f: &mut Frame, area: Rect, state: &EngineState) {
-    let dirty_marker = if state.dirty_since_load {
-        Span::styled("  ●", Style::default().fg(Color::Yellow))
-    } else {
-        Span::raw("")
-    };
-    let line = Line::from(vec![
-        Span::styled(
-            " ↑↓ field   ←→ change   s save   r revert ",
-            Style::default().fg(Color::Gray),
-        ),
-        dirty_marker,
-    ]);
-    f.render_widget(Paragraph::new(line), area);
+fn guidance_for_field(state: &EngineState) -> Vec<Line<'_>> {
+    match state.field {
+        WField::Mode => vec![
+            heading("Execution mode"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "local: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Transcribe in-process using whisper-rs. Default; no network.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "remote: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Send audio to an OpenAI-compatible Whisper endpoint. Set \
+                 [whisper] remote_endpoint and remote_api_key first.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "cli: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Shell out to a `whisper` CLI. Useful for testing custom \
+                 builds without rebuilding voxtype.",
+            ),
+        ],
+        WField::Language => vec![
+            heading("Language"),
+            Line::from(""),
+            Line::from(
+                "BCP-47-ish language code or `auto`. With `auto`, Whisper \
+                 detects the language per recording (slightly slower).",
+            ),
+            Line::from(""),
+            Line::from(
+                "Lock to a specific code (en, fr, de, ja, …) when you only \
+                 ever dictate in one language — Whisper skips detection and \
+                 won't accidentally switch mid-sentence.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Multi-language allowlists (e.g. \"en,fr,de\") can be set in \
+                 config.toml as an array.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+        WField::Translate => vec![
+            heading("Translate to English"),
+            Line::from(""),
+            Line::from(
+                "When on, Whisper translates non-English speech to English \
+                 in the transcript. Off by default.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Useful for capturing meetings where someone speaks another \
+                 language and you want a single English transcript.",
+            ),
+        ],
+        WField::Threads => vec![
+            heading("CPU threads"),
+            Line::from(""),
+            Line::from(
+                "Number of threads Whisper uses for inference. `auto` lets \
+                 voxtype pick (typically physical-core count).",
+            ),
+            Line::from(""),
+            Line::from(
+                "Lower it if you want voxtype to leave headroom for other \
+                 tasks. Bump it to physical-core count if you're CPU-only \
+                 and want max throughput.",
+            ),
+        ],
+        WField::Prompt => vec![
+            heading("Initial prompt"),
+            Line::from(""),
+            Line::from(
+                "Hints Whisper about terminology, capitalization, or \
+                 formatting. Whisper biases output toward what the prompt \
+                 establishes.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Useful for proper nouns and technical terms (\"Tern\", \
+                 \"Voxtype\", \"Hyprland\") so Whisper doesn't transcribe \
+                 them as common words.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "TUI cycles (none) / sample. Edit the body in config.toml \
+                 directly for a custom prompt.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+        WField::FlashAttention => vec![
+            heading("Flash attention"),
+            Line::from(""),
+            Line::from(
+                "GPU-only optimization that reduces memory bandwidth in the \
+                 attention layers. Faster on Vulkan/CUDA, especially on \
+                 large-v3.",
+            ),
+            Line::from(""),
+            Line::from(
+                "No effect on CPU runs. Crashes on a few older driver \
+                 combinations — leave it off if Whisper hangs.",
+            ),
+        ],
+        WField::OnDemandLoading => vec![
+            heading("On-demand model loading"),
+            Line::from(""),
+            Line::from(
+                "Loads the model only when you start recording, then unloads. \
+                 Frees ~1-2 GB of RAM at idle.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Adds a one-shot delay on the first key press of each \
+                 dictation. Worth it if you dictate sporadically; not worth \
+                 it if you're constantly hitting the PTT key.",
+            ),
+        ],
+        WField::GpuIsolation => vec![
+            heading("GPU isolation"),
+            Line::from(""),
+            Line::from(
+                "Each transcription runs in a short-lived subprocess that \
+                 exits afterward, releasing all VRAM.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Useful on hybrid-graphics laptops to let the discrete GPU \
+                 power down between dictations. Adds ~100-300ms startup per \
+                 transcription.",
+            ),
+        ],
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {

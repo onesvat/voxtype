@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
+use super::common::{self, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -209,13 +210,12 @@ impl OutputState {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Output");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
     let state = match &app.output {
         Some(s) => s,
         None => {
+            let block = Block::default().borders(Borders::ALL).title("Output");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
             f.render_widget(
                 Paragraph::new("Failed to load config; check ~/.config/voxtype/config.toml.")
                     .wrap(Wrap { trim: true }),
@@ -225,68 +225,42 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(2), // header
-            Constraint::Length(9), // form
-            Constraint::Min(0),    // help
-            Constraint::Length(1), // hint
-        ])
-        .split(inner);
-
-    if let Some(fb) = &state.feedback {
-        super::common::render_feedback(f, chunks[0], fb.level.into(), &fb.message);
-    }
-    super::common::render_section_header(
-        f,
-        chunks[1],
-        "Output",
-        state.dirty_since_load,
-    );
-    render_form(f, chunks[2], state);
-    render_help(f, chunks[3]);
-    super::common::render_bottom_hint(f, chunks[4], state.dirty_since_load);
-}
-
-fn render_form(f: &mut Frame, area: Rect, state: &OutputState) {
-    let rows = [
-        (Field::Mode, "Output mode", state.mode.clone()),
-        (
-            Field::Fallback,
+    let rows = vec![
+        FormRowSpec::new(state.field == Field::Mode, "Output mode", &state.mode),
+        FormRowSpec::new(
+            state.field == Field::Fallback,
             "Fallback to clipboard",
             yesno(state.fallback_to_clipboard),
         ),
-        (
-            Field::AutoSubmit,
+        FormRowSpec::new(
+            state.field == Field::AutoSubmit,
             "Auto-submit (press Enter)",
             yesno(state.auto_submit),
         ),
-        (
-            Field::ShiftEnterNewlines,
+        FormRowSpec::new(
+            state.field == Field::ShiftEnterNewlines,
             "Newlines as Shift+Enter",
             yesno(state.shift_enter_newlines),
         ),
-        (
-            Field::PreTypeDelay,
+        FormRowSpec::new(
+            state.field == Field::PreTypeDelay,
             "Pre-type delay (ms)",
             state.pre_type_delay_ms.to_string(),
         ),
-        (
-            Field::AppendText,
+        FormRowSpec::new(
+            state.field == Field::AppendText,
             "Append after each",
             display_append(state.append_text.as_deref()),
         ),
-        (
-            Field::PostProcess,
+        FormRowSpec::new(
+            state.field == Field::PostProcess,
             "Post-process command",
             state
                 .post_process_command
                 .as_deref()
                 .map(|s| {
-                    if s.len() > 36 {
-                        format!("{}…", &s[..36])
+                    if s.len() > 30 {
+                        format!("{}…", &s[..30])
                     } else {
                         s.to_string()
                     }
@@ -294,35 +268,26 @@ fn render_form(f: &mut Frame, area: Rect, state: &OutputState) {
                 .unwrap_or_else(|| "(none)".to_string()),
         ),
     ];
-    let lines: Vec<Line> = rows
-        .iter()
-        .map(|(field, label, value)| super::common::form_row(*field == state.field, label, value))
-        .collect();
-    f.render_widget(Paragraph::new(lines), area);
-}
 
-fn render_help(f: &mut Frame, area: Rect) {
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tips",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(
-            "  • type uses wtype -> dotool -> ydotool. clipboard puts text on \
-             the clipboard only. paste = clipboard + Ctrl+V. file appends to \
-             a file path you set in [output] file_path.",
-        ),
-        Line::from(
-            "  • Auto-submit hits Enter automatically — useful for chat boxes.",
-        ),
-        Line::from(
-            "  • Post-process commands run on the transcript before output. \
-             Edit the command body in config.toml; the cycler offers a few \
-             starter presets.",
-        ),
-    ];
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+    let feedback_pair = state.feedback.as_ref().map(|fb| {
+        (
+            match fb.level {
+                FeedbackLevel::Ok => common::FeedbackLevel::Ok,
+                FeedbackLevel::Err => common::FeedbackLevel::Err,
+            },
+            fb.message.as_str(),
+        )
+    });
+
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Output",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance_for_field(state),
+    );
 }
 
 fn yesno(b: bool) -> String {
@@ -335,6 +300,147 @@ fn display_append(s: Option<&str>) -> String {
         Some(" ") => "space".to_string(),
         Some("\n") => "newline".to_string(),
         Some(other) => format!("{:?}", other),
+    }
+}
+
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn guidance_for_field(state: &OutputState) -> Vec<Line<'_>> {
+    match state.field {
+        Field::Mode => vec![
+            heading("Output mode"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "type: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Simulates keyboard typing via wtype → dotool → ydotool fallback. \
+                 Default; works in most apps.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "clipboard: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("Puts text on the clipboard only — you paste it yourself."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "paste: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("Clipboard + Ctrl+V. Faster than typing for long transcripts."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "file: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Appends to a file. Set [output] file_path before using.",
+            ),
+        ],
+        Field::Fallback => vec![
+            heading("Fallback to clipboard"),
+            Line::from(""),
+            Line::from(
+                "When the active output method fails (no compositor support, \
+                 no daemon running, etc.), drop the transcript on the \
+                 clipboard so you don't lose it.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Recommend keeping this on. The only reason to disable is if \
+                 you want voxtype to fail loudly when typing breaks — useful \
+                 in scripted setups.",
+            ),
+        ],
+        Field::AutoSubmit => vec![
+            heading("Auto-submit"),
+            Line::from(""),
+            Line::from(
+                "After typing the transcript, press Enter automatically.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Useful for chat boxes (Slack, Discord, terminal prompts) \
+                 where you'd hit Enter anyway. Skip if you typically want to \
+                 review/edit before sending.",
+            ),
+        ],
+        Field::ShiftEnterNewlines => vec![
+            heading("Newlines as Shift+Enter"),
+            Line::from(""),
+            Line::from(
+                "Convert any newline in the transcript to Shift+Enter \
+                 instead of regular Enter.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Match this to apps where Enter submits and Shift+Enter \
+                 inserts a newline (Cursor, Slack, Discord, ChatGPT, …). \
+                 Otherwise multi-line dictations submit prematurely.",
+            ),
+        ],
+        Field::PreTypeDelay => vec![
+            heading("Pre-type delay"),
+            Line::from(""),
+            Line::from(
+                "Milliseconds to wait before voxtype starts typing. Helps \
+                 some compositors that drop the first character if the \
+                 virtual keyboard hasn't fully initialized.",
+            ),
+            Line::from(""),
+            Line::from(
+                "0 is the default. If you see the first character of \
+                 transcripts dropped, bump to 50-100ms.",
+            ),
+        ],
+        Field::AppendText => vec![
+            heading("Append after each transcription"),
+            Line::from(""),
+            Line::from(
+                "Adds a fixed string after every transcription, before \
+                 auto-submit fires. Lets you tack on a separator without \
+                 saying it.",
+            ),
+            Line::from(""),
+            Line::from(
+                "space: dictate sentences incrementally and end up with \
+                 \"Sentence one. Sentence two.\" without manual spacing.",
+            ),
+            Line::from(""),
+            Line::from(
+                "newline: list-style notes where each PTT press should \
+                 start a new line.",
+            ),
+        ],
+        Field::PostProcess => vec![
+            heading("Post-process command"),
+            Line::from(""),
+            Line::from(
+                "Pipes the transcript through an external command before \
+                 output. The transcript goes in via stdin; the command's \
+                 stdout is what gets typed.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Common uses: local LLM cleanup (Ollama), filler-word \
+                 stripping (sed), markdown formatting.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "TUI cycles a few presets. Edit the command body in \
+                 [post_process] command in config.toml directly.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
     }
 }
 

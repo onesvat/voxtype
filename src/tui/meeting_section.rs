@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
-use super::common::{self, FeedbackLevel};
+use super::common::{self, FeedbackLevel, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -107,71 +107,133 @@ impl MeetingState {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Meeting");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
     let state = match &app.meeting {
         Some(s) => s,
         None => {
-            f.render_widget(Paragraph::new("Failed to load config."), inner);
+            let block = Block::default().borders(Borders::ALL).title("Meeting");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            f.render_widget(Paragraph::new("Failed to load config.").wrap(Wrap { trim: true }), inner);
             return;
         }
     };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(2),
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    if let Some((lvl, msg)) = &state.feedback {
-        common::render_feedback(f, chunks[0], *lvl, msg);
-    }
-    common::render_section_header(f, chunks[1], "Meeting Mode", state.dirty_since_load);
-    let rows = [
-        (Field::Enabled, "Enabled", yesno(state.enabled)),
-        (
-            Field::Diarization,
+
+    let dim_when_off = !state.enabled;
+    let rows = vec![
+        FormRowSpec::new(state.field == Field::Enabled, "Meeting mode", yesno(state.enabled)),
+        FormRowSpec::new(
+            state.field == Field::Diarization,
             "Speaker diarization",
             yesno(state.diarization_enabled),
-        ),
-        (Field::AudioSource, "Audio source", state.audio_source.clone()),
+        )
+        .dimmed(dim_when_off),
+        FormRowSpec::new(
+            state.field == Field::AudioSource,
+            "Audio source",
+            &state.audio_source,
+        )
+        .dimmed(dim_when_off),
     ];
-    let lines: Vec<Line> = rows
-        .iter()
-        .map(|(f, l, v)| common::form_row(*f == state.field, l, v))
-        .collect();
-    f.render_widget(Paragraph::new(lines), chunks[2]);
 
-    let help = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tips",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(
-            "  • Meeting mode chunks long recordings, persists segments, and \
-             optionally attributes them to speakers.",
-        ),
-        Line::from(
-            "  • audio_source = both captures mic + system loopback for \
-             two-sided meeting transcripts (uses GTCRN echo cancellation).",
-        ),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Edit chunk size, summary, and per-speaker config in [meeting.*] in \
-             config.toml directly.",
-            Style::default().fg(Color::Gray),
-        )),
-    ];
-    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }), chunks[3]);
-    common::render_bottom_hint(f, chunks[4], state.dirty_since_load);
+    let feedback_pair = state
+        .feedback
+        .as_ref()
+        .map(|(lvl, msg)| (*lvl, msg.as_str()));
+
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Meeting Mode",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance_for_field(state),
+    );
 }
+
 fn yesno(b: bool) -> String {
     (if b { "yes" } else { "no" }).to_string()
+}
+
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn guidance_for_field(state: &MeetingState) -> Vec<Line<'_>> {
+    match state.field {
+        Field::Enabled => vec![
+            heading("Meeting mode"),
+            Line::from(""),
+            Line::from(
+                "Long-form recording mode. Voxtype chunks audio into \
+                 segments, transcribes each, and stitches a continuous \
+                 transcript with timestamps.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Persists segments to ~/.local/share/voxtype/meetings/ so a \
+                 crash doesn't lose your transcript.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Other [meeting.*] fields (chunk duration, summary command, \
+                 storage path) live in config.toml directly.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+        Field::Diarization => vec![
+            heading("Speaker diarization"),
+            Line::from(""),
+            Line::from(
+                "Tags each segment with a speaker label (Speaker 1, \
+                 Speaker 2, …) so the transcript reads like dialogue.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Uses an ONNX speaker-embedding model (ECAPA-TDNN) plus \
+                 clustering. Requires the ml-diarization feature in your \
+                 build.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Off by default — adds CPU cost and isn't useful for \
+                 single-speaker dictation.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+        Field::AudioSource => vec![
+            heading("Audio source"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "mic: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("Microphone only. Standard interview/podcast capture."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "system: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "System audio (loopback) only. Captures meeting playback \
+                 from Zoom/Meet/etc.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "both: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Mic + system loopback. Voxtype runs GTCRN echo cancellation \
+                 to keep your voice from doubling.",
+            ),
+        ],
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {

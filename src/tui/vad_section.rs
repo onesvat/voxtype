@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
-use super::common::{self, FeedbackLevel};
+use super::common::{self, FeedbackLevel, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -118,12 +118,12 @@ impl VadState {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("VAD");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
     let state = match &app.vad {
         Some(s) => s,
         None => {
+            let block = Block::default().borders(Borders::ALL).title("VAD");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
             f.render_widget(
                 Paragraph::new("Failed to load config.").wrap(Wrap { trim: true }),
                 inner,
@@ -132,64 +132,110 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(2),
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    if let Some((lvl, msg)) = &state.feedback {
-        common::render_feedback(f, chunks[0], *lvl, msg);
-    }
-    common::render_section_header(f, chunks[1], "Voice Activity Detection", state.dirty_since_load);
-
-    let rows = [
-        (Field::Enabled, "Enabled", yesno(state.enabled)),
-        (Field::Backend, "Backend", state.backend.clone()),
-        (
-            Field::Threshold,
+    let dim_when_off = !state.enabled;
+    let rows = vec![
+        FormRowSpec::new(state.field == Field::Enabled, "Enabled", yesno(state.enabled)),
+        FormRowSpec::new(state.field == Field::Backend, "Backend", &state.backend)
+            .dimmed(dim_when_off),
+        FormRowSpec::new(
+            state.field == Field::Threshold,
             "Speech threshold",
             format!("{:.2}", state.threshold),
-        ),
+        )
+        .dimmed(dim_when_off),
     ];
-    let lines: Vec<Line> = rows
-        .iter()
-        .map(|(f, l, v)| common::form_row(*f == state.field, l, v))
-        .collect();
-    f.render_widget(Paragraph::new(lines), chunks[2]);
 
-    let help = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tips",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(
-            "  • VAD filters silence-only recordings before transcription, \
-             preventing Whisper from hallucinating phrases on quiet input.",
-        ),
-        Line::from(
-            "  • backend = auto picks Whisper VAD for the Whisper engine \
-             (downloads ggml-silero-vad.bin) and Energy VAD for ONNX engines \
-             (no model needed).",
-        ),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Run `voxtype setup vad` to download the Silero VAD model.",
-            Style::default().fg(Color::Gray),
-        )),
-    ];
-    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }), chunks[3]);
-    common::render_bottom_hint(f, chunks[4], state.dirty_since_load);
+    let feedback_pair = state
+        .feedback
+        .as_ref()
+        .map(|(lvl, msg)| (*lvl, msg.as_str()));
+
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Voice Activity Detection",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance_for_field(state),
+    );
 }
 
 fn yesno(b: bool) -> String {
     (if b { "yes" } else { "no" }).to_string()
+}
+
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn guidance_for_field(state: &VadState) -> Vec<Line<'_>> {
+    match state.field {
+        Field::Enabled => vec![
+            heading("Voice Activity Detection"),
+            Line::from(""),
+            Line::from(
+                "Filters out silence-only recordings before transcription. \
+                 Without VAD, Whisper sometimes hallucinates phrases like \
+                 \"Thank you.\" on a clip with no speech.",
+            ),
+            Line::from(""),
+            Line::from(
+                "Keep this on if you sometimes accidentally tap the PTT key \
+                 without speaking, or use toggle mode and forget you started \
+                 a recording.",
+            ),
+        ],
+        Field::Backend => vec![
+            heading("VAD backend"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "auto: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Whisper VAD for the Whisper engine; Energy VAD for ONNX. \
+                 Pick this unless you want to override.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "energy: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "RMS-amplitude threshold. Fast, no model needed, works with \
+                 any engine. Less accurate in noisy environments.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "whisper: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "Silero VAD via whisper-rs. Most accurate. Requires \
+                 ggml-silero-vad.bin (run `voxtype setup vad` to fetch).",
+            ),
+        ],
+        Field::Threshold => vec![
+            heading("Speech threshold"),
+            Line::from(""),
+            Line::from(
+                "0.0-1.0. Higher values mean voxtype demands more confident \
+                 speech detection before transcribing.",
+            ),
+            Line::from(""),
+            Line::from(
+                "0.5 is the default and works for most setups. Bump higher \
+                 (0.65-0.75) if voxtype occasionally transcribes background \
+                 noise. Lower (0.35-0.45) if it's rejecting your real speech.",
+            ),
+        ],
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {

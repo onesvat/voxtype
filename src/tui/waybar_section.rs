@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
-use super::common::{self, FeedbackLevel};
+use super::common::{self, FeedbackLevel, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -84,59 +84,75 @@ impl WaybarState {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Waybar");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
     let state = match &app.waybar {
         Some(s) => s,
         None => {
-            f.render_widget(Paragraph::new("Failed to load config."), inner);
+            let block = Block::default().borders(Borders::ALL).title("Waybar");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            f.render_widget(Paragraph::new("Failed to load config.").wrap(Wrap { trim: true }), inner);
             return;
         }
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(2),
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
+    let rows = vec![FormRowSpec::new(true, "Icon theme", &state.icon_theme)];
 
-    if let Some((lvl, msg)) = &state.feedback {
-        common::render_feedback(f, chunks[0], *lvl, msg);
-    }
-    common::render_section_header(f, chunks[1], "Waybar / Status", state.dirty_since_load);
-    let row = common::form_row(true, "Icon theme", &state.icon_theme);
-    f.render_widget(Paragraph::new(vec![row]), chunks[2]);
+    let feedback_pair = state
+        .feedback
+        .as_ref()
+        .map(|(lvl, msg)| (*lvl, msg.as_str()));
 
-    let help = vec![
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Waybar / Status",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance(),
+    );
+}
+
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn guidance<'a>() -> Vec<Line<'a>> {
+    vec![
+        heading("Icon theme"),
+        Line::from(""),
+        Line::from(
+            "The glyph set `voxtype status --follow` emits to your status \
+             bar. Match it to whatever your bar's font supports.",
+        ),
         Line::from(""),
         Line::from(Span::styled(
-            "Tips",
+            "Common picks:",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from(
-            "  • Theme picks the glyph set used by `voxtype status --follow`. \
-             Match it to your status bar font (nerd-font for Nerd Fonts, \
-             phosphor for Phosphor icons, omarchy for the Omarchy ricing).",
-        ),
-        Line::from(
-            "  • Per-state overrides live under [status.icons] in config.toml \
-             (e.g. icons.recording = \"●\"). Inline editing of overrides is \
-             not yet in the TUI.",
-        ),
+        Line::from("  • emoji — works everywhere, no special font needed."),
+        Line::from("  • nerd-font — for users on a Nerd Font."),
+        Line::from("  • phosphor — Phosphor icon font."),
+        Line::from("  • omarchy — matches Omarchy's stock ricing."),
+        Line::from("  • text — plain ASCII, no glyphs at all."),
         Line::from(""),
         Line::from(Span::styled(
-            "  Run `voxtype setup waybar` for ready-to-paste Waybar config.",
+            "Per-state icon overrides live under [status.icons] in \
+             config.toml (e.g. icons.recording = \"●\"). Inline editing of \
+             overrides is on the roadmap.",
             Style::default().fg(Color::Gray),
         )),
-    ];
-    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }), chunks[3]);
-    common::render_bottom_hint(f, chunks[4], state.dirty_since_load);
+        Line::from(""),
+        Line::from(Span::styled(
+            "Run `voxtype setup waybar` for ready-to-paste Waybar config.",
+            Style::default().fg(Color::Gray),
+        )),
+    ]
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {

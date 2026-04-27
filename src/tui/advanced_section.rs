@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::app::{Action, App};
-use super::common::{self, FeedbackLevel};
+use super::common::{self, FeedbackLevel, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 
 #[derive(Debug, Clone)]
@@ -120,54 +120,40 @@ impl AdvancedState {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Advanced");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
     let state = match &app.advanced {
         Some(s) => s,
         None => {
-            f.render_widget(Paragraph::new("Failed to load config."), inner);
+            let block = Block::default().borders(Borders::ALL).title("Advanced");
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            f.render_widget(Paragraph::new("Failed to load config.").wrap(Wrap { trim: true }), inner);
             return;
         }
     };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if state.feedback.is_some() { 2 } else { 0 }),
-            Constraint::Length(2),
-            Constraint::Length(7),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    if let Some((lvl, msg)) = &state.feedback {
-        common::render_feedback(f, chunks[0], *lvl, msg);
-    }
-    common::render_section_header(f, chunks[1], "Advanced", state.dirty_since_load);
 
-    let rows = [
-        (
-            Field::GpuIsolation,
+    let rows = vec![
+        FormRowSpec::new(
+            state.field == Field::GpuIsolation,
             "GPU isolation (subprocess)",
             yesno(state.gpu_isolation),
         ),
-        (
-            Field::OnDemand,
+        FormRowSpec::new(
+            state.field == Field::OnDemand,
             "On-demand model loading",
             yesno(state.on_demand_loading),
         ),
-        (
-            Field::FlashAttention,
+        FormRowSpec::new(
+            state.field == Field::FlashAttention,
             "Flash attention",
             yesno(state.flash_attention),
         ),
-        (
-            Field::Eager,
+        FormRowSpec::new(
+            state.field == Field::Eager,
             "Eager input processing",
             yesno(state.eager_processing),
         ),
-        (
-            Field::GpuDevice,
+        FormRowSpec::new(
+            state.field == Field::GpuDevice,
             "GPU device index",
             state
                 .gpu_device
@@ -175,38 +161,181 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 .unwrap_or_else(|| "auto".to_string()),
         ),
     ];
-    let lines: Vec<Line> = rows
-        .iter()
-        .map(|(f, l, v)| common::form_row(*f == state.field, l, v))
-        .collect();
-    f.render_widget(Paragraph::new(lines), chunks[2]);
 
-    let help = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tips",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(
-            "  • These settings are also surfaced under Engine; they're \
-             collected here for users who want one screen with all the \
-             advanced knobs.",
-        ),
-        Line::from(
-            "  • GPU device index targets the discrete GPU on hybrid systems. \
-             Leave at auto unless transcription is slower than you'd expect \
-             (the integrated GPU often gets picked by accident).",
-        ),
-        Line::from(
-            "  • Eager processing transcribes audio while you're still \
-             recording. Reduces latency at the cost of slightly more CPU.",
-        ),
-    ];
-    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }), chunks[3]);
-    common::render_bottom_hint(f, chunks[4], state.dirty_since_load);
+    let feedback_pair = state
+        .feedback
+        .as_ref()
+        .map(|(lvl, msg)| (*lvl, msg.as_str()));
+
+    common::render_form_with_guidance(
+        f,
+        area,
+        "Advanced",
+        state.dirty_since_load,
+        feedback_pair,
+        &rows,
+        guidance_for_field(state),
+    );
 }
+
 fn yesno(b: bool) -> String {
     (if b { "yes" } else { "no" }).to_string()
+}
+
+fn heading<'a>(text: &'a str) -> Line<'a> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn guidance_for_field(state: &AdvancedState) -> Vec<Line<'_>> {
+    match state.field {
+        Field::GpuIsolation => vec![
+            heading("GPU isolation"),
+            Line::from(""),
+            Line::from(
+                "Runs each transcription in a short-lived subprocess that \
+                 exits afterward. The GPU releases all VRAM between recordings \
+                 instead of holding the model resident.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Turn it on if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You're on a laptop with hybrid graphics and want the \
+                 discrete GPU to power down between dictations.",
+            ),
+            Line::from(
+                "  • You see VRAM use creep upward over a long voxtype \
+                 session.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Leave it off if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • Latency matters more than VRAM. Subprocess startup adds \
+                 ~100-300 ms per recording.",
+            ),
+        ],
+        Field::OnDemand => vec![
+            heading("On-demand model loading"),
+            Line::from(""),
+            Line::from(
+                "When on, voxtype loads the model only when recording starts \
+                 (and unloads at idle). When off, the model stays resident \
+                 from daemon start.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Turn it on if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You only dictate occasionally and don't want the daemon \
+                 holding ~1-2 GB of RAM in the background.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Leave it off if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You dictate frequently. Resident-mode transcription \
+                 starts instantly; on-demand loads add a one-shot delay on \
+                 the first key press.",
+            ),
+        ],
+        Field::FlashAttention => vec![
+            heading("Flash attention"),
+            Line::from(""),
+            Line::from(
+                "A GPU-only inference optimization that reduces memory \
+                 bandwidth pressure in the attention layers. Speeds up \
+                 transcription on capable cards.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Turn it on if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You're on Vulkan or CUDA with a recent GPU. \
+                 Particularly noticeable on large-v3 and large-v3-turbo.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Leave it off if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You're CPU-only or on older hardware (no benefit, may \
+                 cause crashes on a few drivers).",
+            ),
+        ],
+        Field::Eager => vec![
+            heading("Eager input processing"),
+            Line::from(""),
+            Line::from(
+                "Voxtype starts transcribing audio chunks while you're still \
+                 recording, instead of waiting until you release the PTT key. \
+                 The final transcript stitches the chunks together.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Turn it on if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You record long-form (>10 sec) and the post-recording \
+                 wait feels like dead time.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Leave it off if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • You record short bursts (a few seconds). The chunked \
+                 transcripts can occasionally split a sentence awkwardly.",
+            ),
+            Line::from(
+                "  • You're on a laptop and CPU/GPU heat matters. Eager \
+                 mode keeps the inference engine busy during recording.",
+            ),
+        ],
+        Field::GpuDevice => vec![
+            heading("GPU device index"),
+            Line::from(""),
+            Line::from(
+                "Picks which GPU voxtype targets on multi-GPU systems. The \
+                 default (auto) leaves the choice to the driver, which often \
+                 picks the integrated GPU on hybrid laptops.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Set a specific index if:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  • Transcription is slower than expected and you suspect \
+                 the iGPU is being used. Try 1 (or 2) to target the \
+                 discrete card.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Run `vulkaninfo --summary` or `nvidia-smi -L` to see your \
+                 device numbering.",
+                Style::default().fg(Color::Gray),
+            )),
+        ],
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {
