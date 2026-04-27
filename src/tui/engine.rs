@@ -18,6 +18,7 @@ use super::app::{Action, App};
 use super::common::{self, FeedbackLevel as CommonFeedback, FormRowSpec};
 use super::config_editor::{ConfigEditor, EditorError};
 use crate::setup::binary::{self, EngineFamily, InstallKind, Variant};
+use crate::setup::model;
 
 #[derive(Debug, Clone)]
 pub struct EngineState {
@@ -39,6 +40,7 @@ pub struct EngineState {
 #[derive(Debug, Clone, Default)]
 pub struct AllFields {
     // Whisper
+    pub w_model: String,
     pub w_mode: String,
     pub w_language: String,
     pub w_translate: bool,
@@ -49,6 +51,7 @@ pub struct AllFields {
     pub w_gpu_isolation: bool,
 
     // Parakeet
+    pub pk_model: String,
     pub pk_model_type: Option<String>, // "tdt", "ctc", or None for auto-detect
     pub pk_on_demand_loading: bool,
     /// True if the [parakeet] table existed in the config at load time. We
@@ -58,12 +61,14 @@ pub struct AllFields {
     pub pk_section_existed: bool,
 
     // Moonshine
+    pub mn_model: String,
     pub mn_quantized: bool,
     pub mn_threads: Option<i64>,
     pub mn_on_demand_loading: bool,
     pub mn_section_existed: bool,
 
     // SenseVoice
+    pub sv_model: String,
     pub sv_language: String,
     pub sv_use_itn: bool,
     pub sv_threads: Option<i64>,
@@ -71,19 +76,38 @@ pub struct AllFields {
     pub sv_section_existed: bool,
 
     // Paraformer
+    pub pf_model: String,
     pub pf_threads: Option<i64>,
     pub pf_on_demand_loading: bool,
     pub pf_section_existed: bool,
 
     // Dolphin
+    pub dol_model: String,
     pub dol_threads: Option<i64>,
     pub dol_on_demand_loading: bool,
     pub dol_section_existed: bool,
 
     // Omnilingual
+    pub om_model: String,
     pub om_threads: Option<i64>,
     pub om_on_demand_loading: bool,
     pub om_section_existed: bool,
+}
+
+/// Model catalogs per engine. Whisper/Parakeet/Moonshine/SenseVoice come from
+/// the central setup::model registry; Paraformer/Dolphin/Omnilingual aren't
+/// registered yet, so we hardcode their canonical defaults.
+fn model_catalog(engine: &str) -> Vec<&'static str> {
+    match engine {
+        "whisper" => model::valid_model_names(),
+        "parakeet" => model::valid_parakeet_model_names(),
+        "moonshine" => model::valid_moonshine_model_names(),
+        "sensevoice" => model::valid_sensevoice_model_names(),
+        "paraformer" => vec!["paraformer-zh", "paraformer-en"],
+        "dolphin" => vec!["dolphin-base"],
+        "omnilingual" => vec!["omnilingual-300m"],
+        _ => Vec::new(),
+    }
 }
 
 /// Default model name baked into voxtype for each ONNX engine. Used when we
@@ -118,6 +142,7 @@ enum FieldId {
     Engine,
 
     // Whisper
+    WModel,
     WMode,
     WLanguage,
     WTranslate,
@@ -128,29 +153,35 @@ enum FieldId {
     WGpuIsolation,
 
     // Parakeet
+    PkModel,
     PkModelType,
     PkOnDemandLoading,
 
     // Moonshine
+    MnModel,
     MnQuantized,
     MnThreads,
     MnOnDemandLoading,
 
     // SenseVoice
+    SvModel,
     SvLanguage,
     SvUseItn,
     SvThreads,
     SvOnDemandLoading,
 
     // Paraformer
+    PfModel,
     PfThreads,
     PfOnDemandLoading,
 
     // Dolphin
+    DolModel,
     DolThreads,
     DolOnDemandLoading,
 
     // Omnilingual
+    OmModel,
     OmThreads,
     OmOnDemandLoading,
 }
@@ -176,6 +207,7 @@ fn rows_for_engine(engine: &str) -> Vec<FieldId> {
     let mut rows = vec![FieldId::Engine];
     match engine {
         "whisper" => rows.extend_from_slice(&[
+            FieldId::WModel,
             FieldId::WMode,
             FieldId::WLanguage,
             FieldId::WTranslate,
@@ -185,27 +217,39 @@ fn rows_for_engine(engine: &str) -> Vec<FieldId> {
             FieldId::WOnDemandLoading,
             FieldId::WGpuIsolation,
         ]),
-        "parakeet" => rows.extend_from_slice(&[FieldId::PkModelType, FieldId::PkOnDemandLoading]),
+        "parakeet" => rows.extend_from_slice(&[
+            FieldId::PkModel,
+            FieldId::PkModelType,
+            FieldId::PkOnDemandLoading,
+        ]),
         "moonshine" => rows.extend_from_slice(&[
+            FieldId::MnModel,
             FieldId::MnQuantized,
             FieldId::MnThreads,
             FieldId::MnOnDemandLoading,
         ]),
         "sensevoice" => rows.extend_from_slice(&[
+            FieldId::SvModel,
             FieldId::SvLanguage,
             FieldId::SvUseItn,
             FieldId::SvThreads,
             FieldId::SvOnDemandLoading,
         ]),
-        "paraformer" => {
-            rows.extend_from_slice(&[FieldId::PfThreads, FieldId::PfOnDemandLoading])
-        }
-        "dolphin" => {
-            rows.extend_from_slice(&[FieldId::DolThreads, FieldId::DolOnDemandLoading])
-        }
-        "omnilingual" => {
-            rows.extend_from_slice(&[FieldId::OmThreads, FieldId::OmOnDemandLoading])
-        }
+        "paraformer" => rows.extend_from_slice(&[
+            FieldId::PfModel,
+            FieldId::PfThreads,
+            FieldId::PfOnDemandLoading,
+        ]),
+        "dolphin" => rows.extend_from_slice(&[
+            FieldId::DolModel,
+            FieldId::DolThreads,
+            FieldId::DolOnDemandLoading,
+        ]),
+        "omnilingual" => rows.extend_from_slice(&[
+            FieldId::OmModel,
+            FieldId::OmThreads,
+            FieldId::OmOnDemandLoading,
+        ]),
         _ => {}
     }
     rows
@@ -219,6 +263,9 @@ impl EngineState {
             .unwrap_or_else(|| "whisper".to_string());
         let fields = AllFields {
             // Whisper
+            w_model: ed
+                .get_string("whisper", "model")
+                .unwrap_or_else(|| default_model("whisper").to_string()),
             w_mode: ed
                 .get_string("whisper", "mode")
                 .unwrap_or_else(|| "local".to_string()),
@@ -233,6 +280,9 @@ impl EngineState {
             w_gpu_isolation: ed.get_bool("whisper", "gpu_isolation").unwrap_or(false),
 
             // Parakeet
+            pk_model: ed
+                .get_string("parakeet", "model")
+                .unwrap_or_else(|| default_model("parakeet").to_string()),
             pk_model_type: ed.get_string("parakeet", "model_type"),
             pk_on_demand_loading: ed
                 .get_bool("parakeet", "on_demand_loading")
@@ -240,6 +290,9 @@ impl EngineState {
             pk_section_existed: ed.get_string("parakeet", "model").is_some(),
 
             // Moonshine
+            mn_model: ed
+                .get_string("moonshine", "model")
+                .unwrap_or_else(|| default_model("moonshine").to_string()),
             mn_quantized: ed.get_bool("moonshine", "quantized").unwrap_or(true),
             mn_threads: ed.get_int("moonshine", "threads"),
             mn_on_demand_loading: ed
@@ -248,6 +301,9 @@ impl EngineState {
             mn_section_existed: ed.get_string("moonshine", "model").is_some(),
 
             // SenseVoice
+            sv_model: ed
+                .get_string("sensevoice", "model")
+                .unwrap_or_else(|| default_model("sensevoice").to_string()),
             sv_language: ed
                 .get_string("sensevoice", "language")
                 .unwrap_or_else(|| "auto".to_string()),
@@ -259,6 +315,9 @@ impl EngineState {
             sv_section_existed: ed.get_string("sensevoice", "model").is_some(),
 
             // Paraformer
+            pf_model: ed
+                .get_string("paraformer", "model")
+                .unwrap_or_else(|| default_model("paraformer").to_string()),
             pf_threads: ed.get_int("paraformer", "threads"),
             pf_on_demand_loading: ed
                 .get_bool("paraformer", "on_demand_loading")
@@ -266,6 +325,9 @@ impl EngineState {
             pf_section_existed: ed.get_string("paraformer", "model").is_some(),
 
             // Dolphin
+            dol_model: ed
+                .get_string("dolphin", "model")
+                .unwrap_or_else(|| default_model("dolphin").to_string()),
             dol_threads: ed.get_int("dolphin", "threads"),
             dol_on_demand_loading: ed
                 .get_bool("dolphin", "on_demand_loading")
@@ -273,6 +335,9 @@ impl EngineState {
             dol_section_existed: ed.get_string("dolphin", "model").is_some(),
 
             // Omnilingual
+            om_model: ed
+                .get_string("omnilingual", "model")
+                .unwrap_or_else(|| default_model("omnilingual").to_string()),
             om_threads: ed.get_int("omnilingual", "threads"),
             om_on_demand_loading: ed
                 .get_bool("omnilingual", "on_demand_loading")
@@ -391,7 +456,8 @@ impl EngineState {
 
         let f = &self.fields;
 
-        // Whisper
+        // Whisper — always written; voxtype assumes a Whisper config exists.
+        ed.set_string("whisper", "model", &f.w_model);
         ed.set_string("whisper", "mode", &f.w_mode);
         ed.set_string("whisper", "language", &f.w_language);
         ed.set_bool("whisper", "translate", f.w_translate);
@@ -408,13 +474,11 @@ impl EngineState {
         ed.set_bool("whisper", "gpu_isolation", f.w_gpu_isolation);
 
         // Parakeet — only touch the table if it already existed or the user
-        // is making it the active engine. If we're materializing a fresh
-        // [parakeet] table, also write the default model so the table is
-        // valid (model is required by ParakeetConfig).
+        // is making it the active engine. Now that the user can edit model
+        // here directly, the model field is always written when we touch the
+        // table.
         if self.engine == "parakeet" || f.pk_section_existed {
-            if !f.pk_section_existed {
-                ed.set_string("parakeet", "model", default_model("parakeet"));
-            }
+            ed.set_string("parakeet", "model", &f.pk_model);
             match &f.pk_model_type {
                 Some(m) => ed.set_string("parakeet", "model_type", m),
                 None => ed.unset("parakeet", "model_type"),
@@ -424,9 +488,7 @@ impl EngineState {
 
         // Moonshine
         if self.engine == "moonshine" || f.mn_section_existed {
-            if !f.mn_section_existed {
-                ed.set_string("moonshine", "model", default_model("moonshine"));
-            }
+            ed.set_string("moonshine", "model", &f.mn_model);
             ed.set_bool("moonshine", "quantized", f.mn_quantized);
             match f.mn_threads {
                 Some(n) => ed.set_int("moonshine", "threads", n),
@@ -437,9 +499,7 @@ impl EngineState {
 
         // SenseVoice
         if self.engine == "sensevoice" || f.sv_section_existed {
-            if !f.sv_section_existed {
-                ed.set_string("sensevoice", "model", default_model("sensevoice"));
-            }
+            ed.set_string("sensevoice", "model", &f.sv_model);
             ed.set_string("sensevoice", "language", &f.sv_language);
             ed.set_bool("sensevoice", "use_itn", f.sv_use_itn);
             match f.sv_threads {
@@ -451,9 +511,7 @@ impl EngineState {
 
         // Paraformer
         if self.engine == "paraformer" || f.pf_section_existed {
-            if !f.pf_section_existed {
-                ed.set_string("paraformer", "model", default_model("paraformer"));
-            }
+            ed.set_string("paraformer", "model", &f.pf_model);
             match f.pf_threads {
                 Some(n) => ed.set_int("paraformer", "threads", n),
                 None => ed.unset("paraformer", "threads"),
@@ -463,9 +521,7 @@ impl EngineState {
 
         // Dolphin
         if self.engine == "dolphin" || f.dol_section_existed {
-            if !f.dol_section_existed {
-                ed.set_string("dolphin", "model", default_model("dolphin"));
-            }
+            ed.set_string("dolphin", "model", &f.dol_model);
             match f.dol_threads {
                 Some(n) => ed.set_int("dolphin", "threads", n),
                 None => ed.unset("dolphin", "threads"),
@@ -475,9 +531,7 @@ impl EngineState {
 
         // Omnilingual
         if self.engine == "omnilingual" || f.om_section_existed {
-            if !f.om_section_existed {
-                ed.set_string("omnilingual", "model", default_model("omnilingual"));
-            }
+            ed.set_string("omnilingual", "model", &f.om_model);
             match f.om_threads {
                 Some(n) => ed.set_int("omnilingual", "threads", n),
                 None => ed.unset("omnilingual", "threads"),
@@ -568,6 +622,7 @@ impl EngineState {
                 self.cursor = self.cursor.min(max);
                 self.refresh_binary_match();
             }
+            FieldId::WModel => f.w_model = cycle_model("whisper", &f.w_model, delta),
             FieldId::WMode => f.w_mode = cycle_str(MODE_CHOICES, &f.w_mode, delta),
             FieldId::WLanguage => f.w_language = cycle_str(LANG_CHOICES, &f.w_language, delta),
             FieldId::WTranslate => f.w_translate = !f.w_translate,
@@ -584,6 +639,7 @@ impl EngineState {
             FieldId::WOnDemandLoading => f.w_on_demand_loading = !f.w_on_demand_loading,
             FieldId::WGpuIsolation => f.w_gpu_isolation = !f.w_gpu_isolation,
 
+            FieldId::PkModel => f.pk_model = cycle_model("parakeet", &f.pk_model, delta),
             FieldId::PkModelType => {
                 let idx = PARAKEET_MODEL_TYPES
                     .iter()
@@ -595,10 +651,12 @@ impl EngineState {
             }
             FieldId::PkOnDemandLoading => f.pk_on_demand_loading = !f.pk_on_demand_loading,
 
+            FieldId::MnModel => f.mn_model = cycle_model("moonshine", &f.mn_model, delta),
             FieldId::MnQuantized => f.mn_quantized = !f.mn_quantized,
             FieldId::MnThreads => f.mn_threads = cycle_threads(f.mn_threads, delta),
             FieldId::MnOnDemandLoading => f.mn_on_demand_loading = !f.mn_on_demand_loading,
 
+            FieldId::SvModel => f.sv_model = cycle_model("sensevoice", &f.sv_model, delta),
             FieldId::SvLanguage => {
                 f.sv_language = cycle_str(SV_LANG_CHOICES, &f.sv_language, delta)
             }
@@ -606,12 +664,15 @@ impl EngineState {
             FieldId::SvThreads => f.sv_threads = cycle_threads(f.sv_threads, delta),
             FieldId::SvOnDemandLoading => f.sv_on_demand_loading = !f.sv_on_demand_loading,
 
+            FieldId::PfModel => f.pf_model = cycle_model("paraformer", &f.pf_model, delta),
             FieldId::PfThreads => f.pf_threads = cycle_threads(f.pf_threads, delta),
             FieldId::PfOnDemandLoading => f.pf_on_demand_loading = !f.pf_on_demand_loading,
 
+            FieldId::DolModel => f.dol_model = cycle_model("dolphin", &f.dol_model, delta),
             FieldId::DolThreads => f.dol_threads = cycle_threads(f.dol_threads, delta),
             FieldId::DolOnDemandLoading => f.dol_on_demand_loading = !f.dol_on_demand_loading,
 
+            FieldId::OmModel => f.om_model = cycle_model("omnilingual", &f.om_model, delta),
             FieldId::OmThreads => f.om_threads = cycle_threads(f.om_threads, delta),
             FieldId::OmOnDemandLoading => f.om_on_demand_loading = !f.om_on_demand_loading,
         }
@@ -631,6 +692,20 @@ fn cycle_str(choices: &[&'static str], current: &str, delta: i32) -> String {
         .unwrap_or(-1);
     let new = (idx + delta).rem_euclid(choices.len() as i32);
     choices[new as usize].to_string()
+}
+
+fn cycle_model(engine: &str, current: &str, delta: i32) -> String {
+    let names = model_catalog(engine);
+    if names.is_empty() {
+        return current.to_string();
+    }
+    let idx = names
+        .iter()
+        .position(|c| *c == current)
+        .map(|i| i as i32)
+        .unwrap_or(-1);
+    let new = (idx + delta).rem_euclid(names.len() as i32);
+    names[new as usize].to_string()
 }
 
 fn cycle_threads(current: Option<i64>, delta: i32) -> Option<i64> {
@@ -694,6 +769,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
     match fid {
         FieldId::Engine => ("Engine", state.engine.clone()),
 
+        FieldId::WModel => ("Whisper · model", f.w_model.clone()),
         FieldId::WMode => ("Whisper · execution mode", f.w_mode.clone()),
         FieldId::WLanguage => ("Whisper · language", f.w_language.clone()),
         FieldId::WTranslate => ("Whisper · translate to English", yesno(f.w_translate)),
@@ -720,6 +796,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
         FieldId::WOnDemandLoading => ("Whisper · on-demand model load", yesno(f.w_on_demand_loading)),
         FieldId::WGpuIsolation => ("Whisper · GPU isolation", yesno(f.w_gpu_isolation)),
 
+        FieldId::PkModel => ("Parakeet · model", f.pk_model.clone()),
         FieldId::PkModelType => (
             "Parakeet · model architecture",
             f.pk_model_type
@@ -731,6 +808,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
             ("Parakeet · on-demand model load", yesno(f.pk_on_demand_loading))
         }
 
+        FieldId::MnModel => ("Moonshine · model", f.mn_model.clone()),
         FieldId::MnQuantized => ("Moonshine · use quantized model", yesno(f.mn_quantized)),
         FieldId::MnThreads => (
             "Moonshine · threads",
@@ -742,6 +820,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
             ("Moonshine · on-demand model load", yesno(f.mn_on_demand_loading))
         }
 
+        FieldId::SvModel => ("SenseVoice · model", f.sv_model.clone()),
         FieldId::SvLanguage => ("SenseVoice · language", f.sv_language.clone()),
         FieldId::SvUseItn => (
             "SenseVoice · inverse text normalization",
@@ -757,6 +836,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
             ("SenseVoice · on-demand model load", yesno(f.sv_on_demand_loading))
         }
 
+        FieldId::PfModel => ("Paraformer · model", f.pf_model.clone()),
         FieldId::PfThreads => (
             "Paraformer · threads",
             f.pf_threads
@@ -767,6 +847,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
             ("Paraformer · on-demand model load", yesno(f.pf_on_demand_loading))
         }
 
+        FieldId::DolModel => ("Dolphin · model", f.dol_model.clone()),
         FieldId::DolThreads => (
             "Dolphin · threads",
             f.dol_threads
@@ -777,6 +858,7 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
             ("Dolphin · on-demand model load", yesno(f.dol_on_demand_loading))
         }
 
+        FieldId::OmModel => ("Omnilingual · model", f.om_model.clone()),
         FieldId::OmThreads => (
             "Omnilingual · threads",
             f.om_threads
@@ -890,8 +972,17 @@ fn family_name(family: EngineFamily) -> &'static str {
 }
 
 fn guidance(state: &EngineState) -> Vec<Line<'_>> {
+    let f = &state.fields;
     match state.current_field() {
         FieldId::Engine => engine_guidance(state),
+
+        FieldId::WModel => model_guidance("whisper", &f.w_model),
+        FieldId::PkModel => model_guidance("parakeet", &f.pk_model),
+        FieldId::MnModel => model_guidance("moonshine", &f.mn_model),
+        FieldId::SvModel => model_guidance("sensevoice", &f.sv_model),
+        FieldId::PfModel => model_guidance("paraformer", &f.pf_model),
+        FieldId::DolModel => model_guidance("dolphin", &f.dol_model),
+        FieldId::OmModel => model_guidance("omnilingual", &f.om_model),
 
         FieldId::WMode => vec![
             heading("Whisper · execution mode"),
@@ -1136,6 +1227,51 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
 
         FieldId::OmThreads => threads_guidance("Omnilingual"),
         FieldId::OmOnDemandLoading => on_demand_guidance("Omnilingual"),
+    }
+}
+
+fn model_guidance(engine: &str, current: &str) -> Vec<Line<'static>> {
+    let catalog = model_catalog(engine);
+    let mut lines = vec![
+        heading(format!("{} · model", display_engine(engine))),
+        Line::from(""),
+        Line::from(format!(
+            "Inference checkpoint voxtype loads for {}. ←→ cycles through \
+             the models voxtype knows about; pick whichever balances accuracy \
+             and speed for your hardware.",
+            display_engine(engine)
+        )),
+        Line::from(""),
+    ];
+    if !catalog.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Available:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        for name in &catalog {
+            let marker = if *name == current { "▸ " } else { "  " };
+            lines.push(Line::from(format!("  {}{}", marker, name)));
+        }
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(Span::styled(
+        "Models you haven't downloaded yet show up here too — switch to \
+         them, save, then run `voxtype setup model` to fetch the weights.",
+        Style::default().fg(Color::Gray),
+    )));
+    lines
+}
+
+fn display_engine(engine: &str) -> &'static str {
+    match engine {
+        "whisper" => "Whisper",
+        "parakeet" => "Parakeet",
+        "moonshine" => "Moonshine",
+        "sensevoice" => "SenseVoice",
+        "paraformer" => "Paraformer",
+        "dolphin" => "Dolphin",
+        "omnilingual" => "Omnilingual",
+        _ => "Engine",
     }
 }
 
