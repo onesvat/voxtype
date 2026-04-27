@@ -1,7 +1,7 @@
 //! Engine-agnostic voxtype binary inventory and switching.
 //!
 //! Voxtype ships seven prebuilt variants in `/usr/lib/voxtype/` (Whisper:
-//! avx2/avx512/vulkan; ONNX: avx2/avx512/cuda/rocm). `/usr/bin/voxtype` is a
+//! avx2/avx512/vulkan; ONNX: avx2/avx512/cuda/migraphx). `/usr/bin/voxtype` is a
 //! symlink into that directory, and switching engines means updating that
 //! symlink.
 //!
@@ -33,7 +33,11 @@ pub enum Acceleration {
     Avx512,
     Vulkan,
     Cuda,
-    Rocm,
+    /// AMD GPU acceleration via the MIGraphX execution provider in ONNX
+    /// Runtime. Replaced ROCm in 0.7.0; old `voxtype-onnx-rocm` binary names
+    /// still resolve to this variant via [`Variant::from_binary_name`] for
+    /// the symlink-compat window.
+    Migraphx,
     /// Source-built generic binary (no specific tier).
     Native,
 }
@@ -49,7 +53,7 @@ pub enum Variant {
     OnnxAvx2,
     OnnxAvx512,
     OnnxCuda,
-    OnnxRocm,
+    OnnxMigraphx,
     OnnxNative,
 }
 
@@ -62,7 +66,7 @@ impl Variant {
         Variant::OnnxAvx2,
         Variant::OnnxAvx512,
         Variant::OnnxCuda,
-        Variant::OnnxRocm,
+        Variant::OnnxMigraphx,
         Variant::OnnxNative,
     ];
 
@@ -75,7 +79,7 @@ impl Variant {
             Variant::OnnxAvx2 => "voxtype-onnx-avx2",
             Variant::OnnxAvx512 => "voxtype-onnx-avx512",
             Variant::OnnxCuda => "voxtype-onnx-cuda",
-            Variant::OnnxRocm => "voxtype-onnx-rocm",
+            Variant::OnnxMigraphx => "voxtype-onnx-migraphx",
             Variant::OnnxNative => "voxtype-onnx",
         }
     }
@@ -89,7 +93,7 @@ impl Variant {
             Variant::OnnxAvx2
             | Variant::OnnxAvx512
             | Variant::OnnxCuda
-            | Variant::OnnxRocm
+            | Variant::OnnxMigraphx
             | Variant::OnnxNative => EngineFamily::Onnx,
         }
     }
@@ -100,7 +104,7 @@ impl Variant {
             Variant::WhisperAvx512 | Variant::OnnxAvx512 => Acceleration::Avx512,
             Variant::WhisperVulkan => Acceleration::Vulkan,
             Variant::OnnxCuda => Acceleration::Cuda,
-            Variant::OnnxRocm => Acceleration::Rocm,
+            Variant::OnnxMigraphx => Acceleration::Migraphx,
             Variant::WhisperNative | Variant::OnnxNative => Acceleration::Native,
         }
     }
@@ -114,7 +118,7 @@ impl Variant {
             Variant::OnnxAvx2 => "ONNX (AVX2)",
             Variant::OnnxAvx512 => "ONNX (AVX-512)",
             Variant::OnnxCuda => "ONNX (CUDA)",
-            Variant::OnnxRocm => "ONNX (ROCm)",
+            Variant::OnnxMigraphx => "ONNX (MIGraphX)",
             Variant::OnnxNative => "ONNX (native)",
         }
     }
@@ -130,7 +134,12 @@ impl Variant {
             "voxtype-onnx-avx2" | "voxtype-parakeet-avx2" => Some(Variant::OnnxAvx2),
             "voxtype-onnx-avx512" | "voxtype-parakeet-avx512" => Some(Variant::OnnxAvx512),
             "voxtype-onnx-cuda" | "voxtype-parakeet-cuda" => Some(Variant::OnnxCuda),
-            "voxtype-onnx-rocm" | "voxtype-parakeet-rocm" => Some(Variant::OnnxRocm),
+            // Canonical name for the MIGraphX-based ONNX binary (0.7.0+).
+            "voxtype-onnx-migraphx" => Some(Variant::OnnxMigraphx),
+            // Legacy ROCm names continue to resolve during the symlink-compat
+            // window so `voxtype-bin` users with the old AUR symlink still see
+            // the variant correctly identified.
+            "voxtype-onnx-rocm" | "voxtype-parakeet-rocm" => Some(Variant::OnnxMigraphx),
             "voxtype-onnx" | "voxtype-parakeet" => Some(Variant::OnnxNative),
             _ => None,
         }
@@ -232,7 +241,7 @@ fn recommend_whisper(cpu: &Cpu, gpus: &Gpus) -> (Variant, &'static str) {
 }
 
 fn recommend_onnx(cpu: &Cpu, gpus: &Gpus) -> (Variant, &'static str) {
-    // CUDA/ROCm bundles ship with AVX-512 ONNX Runtime, so the CPU has to
+    // CUDA/MIGraphX bundles ship with AVX-512 ONNX Runtime, so the CPU has to
     // support it before we can recommend a GPU variant.
     if gpus.nvidia && cpu.avx512 {
         return (
@@ -243,8 +252,9 @@ fn recommend_onnx(cpu: &Cpu, gpus: &Gpus) -> (Variant, &'static str) {
     if gpus.amd && cpu.avx512 {
         return (
             Variant::OnnxAvx512,
-            "AMD GPU detected, but ROCm support is upstream-bumpy; ONNX (AVX-512) on CPU \
-             is more reliable for now. Switch to ONNX (ROCm) if you've validated it on your card.",
+            "AMD GPU detected. The MIGraphX execution provider is new and may not register on \
+             every driver version; ONNX (AVX-512) on CPU is the safe default. Try ONNX (MIGraphX) \
+             once you've verified it works on your card.",
         );
     }
     if cpu.avx512 {
@@ -356,8 +366,8 @@ fn variant_runs_on_cpu(v: Variant, cpu: &Cpu) -> bool {
         // ONNX GPU binaries bundle an ONNX Runtime built with AVX-512.
         // Runtime CPU dispatch in ORT mostly handles fallback, but the
         // binary itself can still trip SIGILL on init. Treat AVX-512 as
-        // a hard requirement for CUDA/ROCm variants.
-        Acceleration::Cuda | Acceleration::Rocm => cpu.avx512,
+        // a hard requirement for CUDA/MIGraphX variants.
+        Acceleration::Cuda | Acceleration::Migraphx => cpu.avx512,
         Acceleration::Avx2 | Acceleration::Vulkan | Acceleration::Native => cpu.avx2,
     }
 }
@@ -365,7 +375,7 @@ fn variant_runs_on_cpu(v: Variant, cpu: &Cpu) -> bool {
 fn variant_gpu_available(v: Variant, g: &Gpus) -> bool {
     match v.acceleration() {
         Acceleration::Cuda => g.nvidia,
-        Acceleration::Rocm => g.amd,
+        Acceleration::Migraphx => g.amd,
         _ => true,
     }
 }
@@ -560,7 +570,7 @@ mod tests {
             amd: false,
         };
         assert!(variant_gpu_available(Variant::OnnxCuda, &nvidia_only));
-        assert!(!variant_gpu_available(Variant::OnnxRocm, &nvidia_only));
+        assert!(!variant_gpu_available(Variant::OnnxMigraphx, &nvidia_only));
         assert!(variant_gpu_available(Variant::WhisperVulkan, &nvidia_only));
 
         let none = Gpus {
@@ -568,7 +578,7 @@ mod tests {
             amd: false,
         };
         assert!(!variant_gpu_available(Variant::OnnxCuda, &none));
-        assert!(!variant_gpu_available(Variant::OnnxRocm, &none));
+        assert!(!variant_gpu_available(Variant::OnnxMigraphx, &none));
         assert!(variant_gpu_available(Variant::WhisperAvx2, &none));
     }
 
@@ -623,7 +633,7 @@ mod tests {
         assert_eq!(r.whisper, Variant::WhisperVulkan);
         assert_eq!(r.onnx, Variant::OnnxAvx2);
 
-        // AMD + AVX-512 → Vulkan for Whisper, AVX-512 (not ROCm) for ONNX.
+        // AMD + AVX-512 → Vulkan for Whisper, AVX-512 (not MIGraphX) for ONNX.
         let r = recommend(
             &Cpu { avx2: true, avx512: true },
             &Gpus { nvidia: false, amd: true },

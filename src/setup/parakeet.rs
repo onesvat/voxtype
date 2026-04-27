@@ -13,7 +13,7 @@ pub enum ParakeetBackend {
     Avx2,
     Avx512,
     Cuda,
-    Rocm,
+    Migraphx,
     /// Custom binary (source-compiled without specific suffix)
     Custom,
 }
@@ -24,7 +24,7 @@ impl ParakeetBackend {
             ParakeetBackend::Avx2 => Variant::OnnxAvx2,
             ParakeetBackend::Avx512 => Variant::OnnxAvx512,
             ParakeetBackend::Cuda => Variant::OnnxCuda,
-            ParakeetBackend::Rocm => Variant::OnnxRocm,
+            ParakeetBackend::Migraphx => Variant::OnnxMigraphx,
             ParakeetBackend::Custom => Variant::OnnxNative,
         }
     }
@@ -34,7 +34,7 @@ impl ParakeetBackend {
             Variant::OnnxAvx2 => Some(ParakeetBackend::Avx2),
             Variant::OnnxAvx512 => Some(ParakeetBackend::Avx512),
             Variant::OnnxCuda => Some(ParakeetBackend::Cuda),
-            Variant::OnnxRocm => Some(ParakeetBackend::Rocm),
+            Variant::OnnxMigraphx => Some(ParakeetBackend::Migraphx),
             Variant::OnnxNative => Some(ParakeetBackend::Custom),
             _ => None,
         }
@@ -49,7 +49,7 @@ impl ParakeetBackend {
             ParakeetBackend::Avx2 => Variant::WhisperAvx2,
             ParakeetBackend::Avx512 => Variant::WhisperAvx512,
             // GPU users get Vulkan as the closest Whisper equivalent.
-            ParakeetBackend::Cuda | ParakeetBackend::Rocm => Variant::WhisperVulkan,
+            ParakeetBackend::Cuda | ParakeetBackend::Migraphx => Variant::WhisperVulkan,
             ParakeetBackend::Custom => Variant::WhisperNative,
         }
     }
@@ -94,7 +94,7 @@ fn detect_best_parakeet_backend() -> Option<ParakeetBackend> {
 
     let preference = [
         Variant::OnnxCuda,
-        Variant::OnnxRocm,
+        Variant::OnnxMigraphx,
         Variant::OnnxAvx512,
         Variant::OnnxAvx2,
         Variant::OnnxNative,
@@ -150,7 +150,7 @@ pub fn show_status() {
             ParakeetBackend::Avx2,
             ParakeetBackend::Avx512,
             ParakeetBackend::Cuda,
-            ParakeetBackend::Rocm,
+            ParakeetBackend::Migraphx,
             ParakeetBackend::Custom,
         ] {
             let installed = available.contains(&backend);
@@ -179,7 +179,7 @@ pub fn show_status() {
         println!("GPU: not detected");
     }
     if (gpus.nvidia || gpus.amd) && !cpu.avx512 {
-        println!("\nNote: ONNX GPU binaries (CUDA/ROCm) require AVX-512 CPU support.");
+        println!("\nNote: ONNX GPU binaries (CUDA/MIGraphX) require AVX-512 CPU support.");
         println!("  Your CPU supports AVX2 only. Use ONNX (AVX2) for CPU-based inference,");
         println!("  or use the Whisper engine with Vulkan for GPU acceleration.");
     }
@@ -291,7 +291,7 @@ mod tests {
             ParakeetBackend::Avx2,
             ParakeetBackend::Avx512,
             ParakeetBackend::Cuda,
-            ParakeetBackend::Rocm,
+            ParakeetBackend::Migraphx,
             ParakeetBackend::Custom,
         ] {
             assert_eq!(ParakeetBackend::from_variant(b.variant()), Some(b));
@@ -316,7 +316,7 @@ mod tests {
             ParakeetBackend::Avx2,
             ParakeetBackend::Avx512,
             ParakeetBackend::Cuda,
-            ParakeetBackend::Rocm,
+            ParakeetBackend::Migraphx,
             ParakeetBackend::Custom,
         ] {
             assert_eq!(b.whisper_equivalent().family(), EngineFamily::Whisper);

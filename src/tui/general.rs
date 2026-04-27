@@ -376,13 +376,13 @@ fn na_hint_lines<'a>(row: usize, col: usize) -> Vec<Line<'a>> {
             "For NVIDIA GPU acceleration with Whisper, use Vulkan — it covers \
              NVIDIA, AMD, and Intel GPUs in a single binary."
         }
-        (Some(EngineFamily::Whisper), Some(Acceleration::Rocm)) => {
+        (Some(EngineFamily::Whisper), Some(Acceleration::Migraphx)) => {
             "For AMD GPU acceleration with Whisper, use Vulkan — voxtype's \
              whisper.cpp build uses Vulkan instead of ROCm."
         }
         (Some(EngineFamily::Onnx), Some(Acceleration::Vulkan)) => {
             "ONNX Runtime does not ship a Vulkan execution provider. Use \
-             ONNX (CUDA) for NVIDIA, ONNX (ROCm) for AMD, or ONNX (AVX2/AVX-512) \
+             ONNX (CUDA) for NVIDIA, ONNX (MIGraphX) for AMD, or ONNX (AVX2/AVX-512) \
              for CPU."
         }
         _ => "This combination is not built.",
@@ -479,13 +479,14 @@ fn recommended_models(v: Variant) -> ModelRecommendations {
                  your VRAM.",
             ),
         },
-        Variant::OnnxRocm => ModelRecommendations {
+        Variant::OnnxMigraphx => ModelRecommendations {
             english: "parakeet-tdt-0.6b-v3",
             european: "omnilingual-300m  (1600 languages)",
             asian: "sensevoice-small  (zh, en, ja, ko, yue)",
             note: Some(
-                "ROCm execution provider is occasionally flaky; if you see ORT \
-                 init errors, fall back to ONNX (AVX-512) on CPU.",
+                "MIGraphX execution provider is new and may not register on all \
+                 driver versions; if you see ORT registration errors, fall back \
+                 to ONNX (AVX-512) on CPU.",
             ),
         },
     }
@@ -572,18 +573,20 @@ fn variant_hint(v: Variant) -> VariantHint {
             speed: "10-20x AVX2 on capable GPUs; Parakeet faster than real-time even at large sizes",
             hardware: "NVIDIA GPU + CUDA 12 drivers; AVX-512 CPU",
         },
-        Variant::OnnxRocm => VariantHint {
-            headline: "ONNX engines on AMD ROCm",
+        Variant::OnnxMigraphx => VariantHint {
+            headline: "ONNX engines on AMD MIGraphX",
             body: &[
-                "GPU inference via the ROCm execution provider for AMD GPUs.",
+                "GPU inference for AMD GPUs via the MIGraphX execution provider \
+                 (replaces the ROCm EP that was retired in voxtype 0.7.0).",
                 "Note: this binary bundles an ONNX Runtime built with AVX-512, \
-                 so the CPU also needs AVX-512 to load it cleanly. ROCm support \
-                 is upstream-bumpy; if it's flaky, use ONNX (AVX-512) on CPU \
-                 or switch to Whisper (Vulkan).",
+                 so the CPU also needs AVX-512 to load it cleanly. MIGraphX \
+                 support is new — if the provider fails to register on your \
+                 driver/card combo, fall back to ONNX (AVX-512) on CPU or \
+                 switch the engine to Whisper (Vulkan).",
             ],
             models: "Same as ONNX (AVX2)",
             speed: "Comparable to CUDA on similarly-tier GPUs",
-            hardware: "AMD GPU with ROCm runtime; AVX-512 CPU",
+            hardware: "AMD GPU with MIGraphX-capable driver; AVX-512 CPU",
         },
         Variant::OnnxNative => VariantHint {
             headline: "ONNX engines (source build)",
@@ -632,7 +635,7 @@ fn accel_label(a: Acceleration) -> &'static str {
         Acceleration::Avx512 => "AVX-512",
         Acceleration::Vulkan => "Vulkan",
         Acceleration::Cuda => "CUDA",
-        Acceleration::Rocm => "ROCm",
+        Acceleration::Migraphx => "MIGraphX",
         Acceleration::Native => "native",
     }
 }

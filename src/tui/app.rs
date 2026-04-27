@@ -30,7 +30,7 @@ pub const COLS: &[Acceleration] = &[
     Acceleration::Avx512,
     Acceleration::Vulkan,
     Acceleration::Cuda,
-    Acceleration::Rocm,
+    Acceleration::Migraphx,
 ];
 
 pub struct App {
@@ -93,7 +93,7 @@ fn build_inventory(force_package_mode: bool) -> Inventory {
 
 fn variant_runs_on_cpu(v: Variant, cpu: &binary::Cpu) -> bool {
     match v.acceleration() {
-        Acceleration::Avx512 | Acceleration::Cuda | Acceleration::Rocm => cpu.avx512,
+        Acceleration::Avx512 | Acceleration::Cuda | Acceleration::Migraphx => cpu.avx512,
         _ => cpu.avx2,
     }
 }
@@ -101,7 +101,7 @@ fn variant_runs_on_cpu(v: Variant, cpu: &binary::Cpu) -> bool {
 fn variant_gpu_available(v: Variant, g: &binary::Gpus) -> bool {
     match v.acceleration() {
         Acceleration::Cuda => g.nvidia,
-        Acceleration::Rocm => g.amd,
+        Acceleration::Migraphx => g.amd,
         _ => true,
     }
 }
