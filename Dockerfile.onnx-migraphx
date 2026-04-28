@@ -53,14 +53,27 @@ RUN cargo build --release --features parakeet-migraphx,moonshine,sensevoice,para
     --config 'profile.release.codegen-units=8' \
     && cp target/release/voxtype /tmp/voxtype-onnx-migraphx
 
+# The MIGraphX execution provider in ort 2.0.0-rc.12 dlopen's its companion
+# shared libs at runtime instead of being statically linked. They must be
+# installed alongside the binary or the EP fails to register and ort
+# silently falls back to CPU.
+RUN mkdir -p /tmp/onnx-migraphx-libs \
+    && cp /build/target/release/libonnxruntime_providers_migraphx.so /tmp/onnx-migraphx-libs/ 2>/dev/null \
+        || cp /build/target/release/examples/libonnxruntime_providers_migraphx.so /tmp/onnx-migraphx-libs/ \
+    && cp /build/target/release/examples/libonnxruntime_providers_shared.so /tmp/onnx-migraphx-libs/
+
 # Verify binary
 RUN echo "=== Verifying ONNX MIGraphX binary ===" \
     && /tmp/voxtype-onnx-migraphx --version \
     && echo "=== Binary size ===" \
-    && ls -lh /tmp/voxtype-onnx-migraphx
+    && ls -lh /tmp/voxtype-onnx-migraphx \
+    && echo "=== Companion .so files ===" \
+    && ls -lh /tmp/onnx-migraphx-libs/
 
-# Output stage
+# Output stage: copy binary and companion .so files
 CMD mkdir -p /output \
     && cp /tmp/voxtype-onnx-migraphx /output/voxtype-${VERSION}-linux-x86_64-onnx-migraphx \
-    && echo "Binary copied to /output:" \
-    && ls -la /output/voxtype-*
+    && cp /tmp/onnx-migraphx-libs/libonnxruntime_providers_migraphx.so /output/voxtype-${VERSION}-linux-x86_64-onnx-migraphx.libonnxruntime_providers_migraphx.so \
+    && cp /tmp/onnx-migraphx-libs/libonnxruntime_providers_shared.so /output/voxtype-${VERSION}-linux-x86_64-onnx-migraphx.libonnxruntime_providers_shared.so \
+    && echo "Output:" \
+    && ls -la /output/voxtype-${VERSION}-linux-x86_64-onnx-migraphx*

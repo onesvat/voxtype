@@ -391,23 +391,32 @@ fn probe_cuda_runtime() -> bool {
     let minor = (version % 1000) / 10;
     tracing::info!("Detected CUDA runtime version: {}.{}", major, minor);
 
-    // ort 2.0.0-rc.12 ships prebuilt ONNX Runtime binaries for both CUDA 12
-    // and CUDA 13 and selects between them at runtime via cudaRuntimeGetVersion
-    // (override with ORT_CUDA_VERSION). A major version outside that range
-    // would cause a segfault during CUDA EP initialization.
-    const SUPPORTED_CUDA_MAJORS: &[i32] = &[12, 13];
+    // ort 2.0.0-rc.12 picks the cu12 or cu13 prebuilt at compile time from
+    // ORT_CUDA_VERSION (see ort-sys/build/download/resolve.rs). build.rs
+    // mirrors that selection into VOXTYPE_BUILD_CUDA_MAJOR so this probe
+    // accepts only the runtime version the bundled EP can actually talk to.
+    // A mismatched major would crash ort's CUDA EP during initialization.
+    //
+    // Voxtype ships separate voxtype-onnx-cuda-12 and voxtype-onnx-cuda-13
+    // binaries. `voxtype setup gpu --enable` symlinks voxtype-onnx-cuda to
+    // whichever variant matches the host's CUDA runtime.
+    const EXPECTED_CUDA_MAJOR: i32 = match env!("VOXTYPE_BUILD_CUDA_MAJOR").as_bytes() {
+        b"13" => 13,
+        _ => 12,
+    };
 
-    if !SUPPORTED_CUDA_MAJORS.contains(&major) {
+    if major != EXPECTED_CUDA_MAJOR {
         tracing::error!(
-            "CUDA version mismatch: found CUDA {}.{}, but the bundled ONNX Runtime \
-             requires CUDA 12.x or 13.x. Continuing would crash the process.\n  \
+            "CUDA version mismatch: found CUDA {major}.{minor}, but this binary's \
+             bundled ONNX Runtime requires CUDA {EXPECTED_CUDA_MAJOR}.x. \
+             Continuing would crash the process.\n  \
              Options:\n  \
-             1. Install CUDA 12 or CUDA 13\n  \
-             2. Use the pre-built release binary (voxtype-onnx-cuda)\n  \
+             1. Install the matching voxtype-onnx-cuda-{EXPECTED_CUDA_MAJOR} package\n  \
+             2. Switch to voxtype-onnx-cuda-{} for your CUDA version (`voxtype setup gpu --enable` \
+             auto-detects and points the symlink at the right one)\n  \
              3. Build from source with --features parakeet-load-dynamic to link \
              against your system's ONNX Runtime instead",
             major,
-            minor,
         );
         return false;
     }
