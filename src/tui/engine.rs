@@ -1232,6 +1232,7 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
 
 fn model_guidance(engine: &str, current: &str) -> Vec<Line<'static>> {
     let catalog = model_catalog(engine);
+    let installed = installed_models_for(engine);
     let mut lines = vec![
         heading(format!("{} · model", display_engine(engine))),
         Line::from(""),
@@ -1245,21 +1246,57 @@ fn model_guidance(engine: &str, current: &str) -> Vec<Line<'static>> {
     ];
     if !catalog.is_empty() {
         lines.push(Line::from(Span::styled(
-            "Available:",
+            "Available  ( ● = installed,  · = not downloaded )",
             Style::default().add_modifier(Modifier::BOLD),
         )));
         for name in &catalog {
-            let marker = if *name == current { "▸ " } else { "  " };
-            lines.push(Line::from(format!("  {}{}", marker, name)));
+            let active = *name == current;
+            let inst = installed.iter().any(|i| i == name);
+            let cursor = if active { "▸ " } else { "  " };
+            let marker = if inst { "●" } else { "·" };
+            let suffix = if inst { "" } else { "  (not downloaded)" };
+            let style = if !inst {
+                Style::default().fg(Color::Gray)
+            } else if active {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {}{} {}{}", cursor, marker, name, suffix),
+                style,
+            )));
         }
         lines.push(Line::from(""));
     }
     lines.push(Line::from(Span::styled(
-        "Models you haven't downloaded yet show up here too — switch to \
-         them, save, then run `voxtype setup model` to fetch the weights.",
+        "Models you haven't downloaded yet show up here too. Switch to one, \
+         save, then run `voxtype setup model` to fetch the weights.",
         Style::default().fg(Color::Gray),
     )));
     lines
+}
+
+/// Installed models on disk for a given engine. Mirrors the inventory the old
+/// Models section used to show.
+fn installed_models_for(engine: &str) -> Vec<String> {
+    use crate::config::Config;
+    let dir = Config::models_dir();
+    let catalog = model_catalog(engine);
+    catalog
+        .into_iter()
+        .filter(|name| {
+            if engine == "whisper" {
+                dir.join(format!("ggml-{}.bin", name)).exists()
+            } else {
+                let p = dir.join(name);
+                p.exists() || p.is_dir()
+            }
+        })
+        .map(|s| s.to_string())
+        .collect()
 }
 
 fn display_engine(engine: &str) -> &'static str {

@@ -14,7 +14,6 @@ mod engine;
 mod general;
 mod hotkey;
 mod meeting_section;
-mod models_section;
 mod notifications_section;
 mod output_section;
 mod section;
@@ -188,7 +187,6 @@ fn handle_section_key(app: &mut App, key: KeyEvent) -> Action {
         Section::General => general::handle_key(app, key),
         Section::Hotkey => hotkey::handle_key(app, key),
         Section::Audio => audio::handle_key(app, key),
-        Section::Models => models_section::handle_key(app, key),
         Section::Engine => engine::handle_key(app, key),
         Section::Output => output_section::handle_key(app, key),
         Section::Text => text_section::handle_key(app, key),
@@ -253,7 +251,6 @@ fn render_section(f: &mut Frame, area: Rect, app: &App) {
         Section::General => general::render(f, area, app),
         Section::Hotkey => hotkey::render(f, area, app),
         Section::Audio => audio::render(f, area, app),
-        Section::Models => models_section::render(f, area, app),
         Section::Engine => engine::render(f, area, app),
         Section::Output => output_section::render(f, area, app),
         Section::Text => text_section::render(f, area, app),

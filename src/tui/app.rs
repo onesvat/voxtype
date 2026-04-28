@@ -6,7 +6,6 @@ use std::path::Path;
 use super::audio::AudioState;
 use super::engine::EngineState;
 use super::hotkey::HotkeyState;
-use super::models_section::ModelsState;
 use super::advanced_section::AdvancedState;
 use super::meeting_section::MeetingState;
 use super::notifications_section::NotificationsState;
@@ -63,7 +62,6 @@ pub struct App {
     /// for the first time (or load fails).
     pub hotkey: Option<HotkeyState>,
     pub audio: Option<AudioState>,
-    pub models: Option<ModelsState>,
     pub engine: Option<EngineState>,
     pub output: Option<OutputState>,
     pub text: Option<TextState>,
@@ -134,7 +132,6 @@ impl App {
             sidebar_focused: true,
             hotkey: None,
             audio: None,
-            models: None,
             engine: None,
             output: None,
             text: None,
@@ -154,9 +151,6 @@ impl App {
             }
             Section::Audio if self.audio.is_none() => {
                 self.audio = AudioState::load().ok();
-            }
-            Section::Models if self.models.is_none() => {
-                self.models = ModelsState::load().ok();
             }
             Section::Engine if self.engine.is_none() => {
                 self.engine = EngineState::load().ok();

@@ -3,10 +3,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     General,
+    Engine,
     Hotkey,
     Audio,
-    Models,
-    Engine,
     Output,
     Text,
     Vad,
@@ -20,7 +19,6 @@ impl Section {
     pub const ALL: &'static [Section] = &[
         Section::General,
         Section::Engine,
-        Section::Models,
         Section::Hotkey,
         Section::Audio,
         Section::Output,
@@ -35,10 +33,9 @@ impl Section {
     pub const fn label(self) -> &'static str {
         match self {
             Section::General => "General",
+            Section::Engine => "Engine",
             Section::Hotkey => "Hotkey",
             Section::Audio => "Audio",
-            Section::Models => "Models",
-            Section::Engine => "Engine",
             Section::Output => "Output",
             Section::Text => "Text",
             Section::Vad => "VAD",
@@ -54,10 +51,9 @@ impl Section {
     pub const fn summary(self) -> &'static str {
         match self {
             Section::General => "Engine, variant binary, daemon status",
+            Section::Engine => "Engine + model + per-engine tuning",
             Section::Hotkey => "Push-to-talk key, mode, modifier, cancel key",
             Section::Audio => "Input device, max duration, feedback, MPRIS",
-            Section::Models => "Pick and download models for the active engine",
-            Section::Engine => "Engine-specific tuning (Whisper, Parakeet, etc.)",
             Section::Output => "Mode, driver order, post-processing, profiles",
             Section::Text => "Spoken punctuation, replacements",
             Section::Vad => "Silero VAD, energy thresholds, eager processing",
