@@ -18,7 +18,6 @@ mod notifications_section;
 mod output_section;
 mod section;
 mod sidebar;
-mod stub;
 mod text_section;
 mod vad_section;
 mod waybar_section;
@@ -320,12 +319,29 @@ fn render_title(f: &mut Frame, area: Rect) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let hint = if app.sidebar_focused {
-        " ↑↓ navigate sections   Enter / → open   Tab focus content   ? help   q quit "
+    let line = if app.sidebar_focused {
+        // Show the highlighted section's summary alongside the keymap so the
+        // user sees what each section covers without opening it.
+        let summary = Section::ALL
+            .get(app.sidebar_cursor)
+            .map(|s| s.summary())
+            .unwrap_or("");
+        Line::from(vec![
+            Span::styled(
+                " ↑↓  Enter open  Tab content  ? help  q quit  ",
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!("│  {}", summary),
+                Style::default().fg(Color::Cyan),
+            ),
+        ])
     } else {
-        " Tab / Esc back to sidebar   ? help   q quit "
+        Line::from(Span::styled(
+            " Tab / Esc back to sidebar   ? help   q quit ",
+            Style::default().fg(Color::Gray),
+        ))
     };
-    let line = Line::from(Span::styled(hint, Style::default().fg(Color::Gray)));
     f.render_widget(Paragraph::new(line), area);
 }
 

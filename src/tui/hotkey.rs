@@ -473,9 +473,18 @@ fn guidance_enabled<'a>(state: &'a HotkeyState) -> Vec<Line<'a>> {
                 .add_modifier(Modifier::BOLD),
         )));
         for b in &bindings {
+            let file = b
+                .source
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
             lines.push(Line::from(format!(
                 "  • [{}] {}  →  voxtype {}",
                 b.compositor, b.keys, b.action
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("      from {}", file),
+                Style::default().fg(Color::Gray),
             )));
         }
         lines.push(Line::from(""));
