@@ -457,7 +457,9 @@ fn recommended_models(v: Variant) -> ModelRecommendations {
             asian: "sensevoice-small  (zh, en, ja, ko, yue in one model)",
             note: Some(
                 "On AVX2-only CPUs the int8 Parakeet variant is the practical \
-                 default. Omnilingual is also viable but heavier.",
+                 default. Omnilingual is also viable but heavier; Cohere is \
+                 the heaviest at ~3 GB but ranks #1 on the Open ASR \
+                 Leaderboard.",
             ),
         },
         Variant::OnnxAvx512 => ModelRecommendations {
@@ -542,7 +544,8 @@ fn variant_hint(v: Variant) -> VariantHint {
             headline: "ONNX engines on AVX2 CPUs",
             body: &[
                 "CPU inference for the ONNX Runtime engine family: Parakeet, \
-                 Moonshine, SenseVoice, Paraformer, Dolphin, and Omnilingual.",
+                 Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, and \
+                 Cohere Transcribe.",
                 "Pick this when you don't have a GPU but want a faster, more \
                  accurate alternative to Whisper.",
             ],

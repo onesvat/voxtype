@@ -107,6 +107,13 @@ pub struct AllFields {
     pub om_threads: Option<i64>,
     pub om_on_demand_loading: bool,
     pub om_section_existed: bool,
+
+    // Cohere Transcribe (ONNX, ~3 GB int8 model)
+    pub co_model: String,
+    pub co_language: String,
+    pub co_threads: Option<i64>,
+    pub co_on_demand_loading: bool,
+    pub co_section_existed: bool,
 }
 
 /// Model catalogs per engine. Whisper/Parakeet/Moonshine/SenseVoice come from
@@ -121,6 +128,7 @@ fn model_catalog(engine: &str) -> Vec<&'static str> {
         "paraformer" => vec!["paraformer-zh", "paraformer-en"],
         "dolphin" => vec!["dolphin-base"],
         "omnilingual" => vec!["omnilingual-300m"],
+        "cohere" => vec!["cohere-transcribe-int8"],
         _ => Vec::new(),
     }
 }
@@ -137,6 +145,7 @@ const fn default_model(engine: &str) -> &'static str {
         b"paraformer" => "paraformer-zh",
         b"dolphin" => "dolphin-base",
         b"omnilingual" => "omnilingual-300m",
+        b"cohere" => "cohere-transcribe-int8",
         _ => "",
     }
 }
@@ -202,6 +211,12 @@ pub enum FieldId {
     OmModel,
     OmThreads,
     OmOnDemandLoading,
+
+    // Cohere
+    CoModel,
+    CoLanguage,
+    CoThreads,
+    CoOnDemandLoading,
 }
 
 const ENGINE_CHOICES: &[&str] = &[
@@ -212,6 +227,14 @@ const ENGINE_CHOICES: &[&str] = &[
     "paraformer",
     "dolphin",
     "omnilingual",
+    "cohere",
+];
+
+/// Cohere Transcribe officially supports these 14 languages. Token IDs are
+/// looked up by name from tokens.txt at runtime, so the TUI only needs to
+/// pass the two-letter code through to [cohere] language.
+const CO_LANG_CHOICES: &[&str] = &[
+    "ar", "de", "en", "es", "fr", "hi", "it", "ja", "ko", "nl", "pt", "ru", "tr", "zh",
 ];
 
 const MODE_CHOICES: &[&str] = &["local", "remote", "cli"];
@@ -276,6 +299,12 @@ fn rows_for_engine_with_mode(engine: &str, whisper_mode: &str) -> Vec<FieldId> {
             FieldId::OmModel,
             FieldId::OmThreads,
             FieldId::OmOnDemandLoading,
+        ]),
+        "cohere" => rows.extend_from_slice(&[
+            FieldId::CoModel,
+            FieldId::CoLanguage,
+            FieldId::CoThreads,
+            FieldId::CoOnDemandLoading,
         ]),
         _ => {}
     }
@@ -373,6 +402,19 @@ impl EngineState {
                 .get_bool("omnilingual", "on_demand_loading")
                 .unwrap_or(false),
             om_section_existed: ed.get_string("omnilingual", "model").is_some(),
+
+            // Cohere
+            co_model: ed
+                .get_string("cohere", "model")
+                .unwrap_or_else(|| default_model("cohere").to_string()),
+            co_language: ed
+                .get_string("cohere", "language")
+                .unwrap_or_else(|| "en".to_string()),
+            co_threads: ed.get_int("cohere", "threads"),
+            co_on_demand_loading: ed
+                .get_bool("cohere", "on_demand_loading")
+                .unwrap_or(false),
+            co_section_existed: ed.get_string("cohere", "model").is_some(),
         };
         let mut state = Self {
             engine,
@@ -582,6 +624,17 @@ impl EngineState {
             ed.set_bool("omnilingual", "on_demand_loading", f.om_on_demand_loading);
         }
 
+        // Cohere
+        if self.engine == "cohere" || f.co_section_existed {
+            ed.set_string("cohere", "model", &f.co_model);
+            ed.set_string("cohere", "language", &f.co_language);
+            match f.co_threads {
+                Some(n) => ed.set_int("cohere", "threads", n),
+                None => ed.unset("cohere", "threads"),
+            }
+            ed.set_bool("cohere", "on_demand_loading", f.co_on_demand_loading);
+        }
+
         match ed.save() {
             Ok(()) => {
                 self.dirty_since_load = false;
@@ -782,6 +835,13 @@ impl EngineState {
             FieldId::OmModel => f.om_model = cycle_model("omnilingual", &f.om_model, delta),
             FieldId::OmThreads => f.om_threads = cycle_threads(f.om_threads, delta),
             FieldId::OmOnDemandLoading => f.om_on_demand_loading = !f.om_on_demand_loading,
+
+            FieldId::CoModel => f.co_model = cycle_model("cohere", &f.co_model, delta),
+            FieldId::CoLanguage => {
+                f.co_language = cycle_str(CO_LANG_CHOICES, &f.co_language, delta)
+            }
+            FieldId::CoThreads => f.co_threads = cycle_threads(f.co_threads, delta),
+            FieldId::CoOnDemandLoading => f.co_on_demand_loading = !f.co_on_demand_loading,
         }
         self.dirty_since_load = true;
         self.feedback = None;
@@ -1009,6 +1069,19 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
         FieldId::OmOnDemandLoading => {
             ("Omnilingual · on-demand model load", yesno(f.om_on_demand_loading))
         }
+
+        FieldId::CoModel => ("Cohere · model", f.co_model.clone()),
+        FieldId::CoLanguage => ("Cohere · language", f.co_language.clone()),
+        FieldId::CoThreads => (
+            "Cohere · threads",
+            f.co_threads
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "auto".to_string()),
+        ),
+        FieldId::CoOnDemandLoading => (
+            "Cohere · on-demand model load",
+            yesno(f.co_on_demand_loading),
+        ),
     }
 }
 
@@ -1101,6 +1174,11 @@ fn engine_guidance(state: &EngineState) -> Vec<Line<'static>> {
             "Specialized FunASR models. Paraformer focuses on Chinese, \
              Dolphin is dictation-tuned, Omnilingual covers 1600 languages.",
         ),
+        (
+            "cohere",
+            "Cohere Transcribe (Cohere Labs). #1 on the Open ASR Leaderboard \
+             for English (5.42 WER). 14 languages. ~3 GB on disk.",
+        ),
     ] {
         lines.push(Line::from(Span::styled(
             format!("{}: ", name),
@@ -1136,6 +1214,7 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
         FieldId::PfModel => model_guidance("paraformer", &f.pf_model),
         FieldId::DolModel => model_guidance("dolphin", &f.dol_model),
         FieldId::OmModel => model_guidance("omnilingual", &f.om_model),
+        FieldId::CoModel => model_guidance("cohere", &f.co_model),
 
         FieldId::WMode => vec![
             heading("Whisper · execution mode"),
@@ -1403,6 +1482,28 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
         FieldId::OmThreads => threads_guidance("Omnilingual"),
         FieldId::OmOnDemandLoading => on_demand_guidance("Omnilingual"),
 
+        FieldId::CoLanguage => vec![
+            heading("Cohere · language"),
+            Line::from(""),
+            Line::from(
+                "Cohere Transcribe officially supports 14 languages. Pick the \
+                 one you'll be dictating in; Cohere does not auto-detect.",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Supported codes:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(
+                "  ar (Arabic), de (German), en (English), es (Spanish), \
+                 fr (French), hi (Hindi), it (Italian), ja (Japanese), \
+                 ko (Korean), nl (Dutch), pt (Portuguese), ru (Russian), \
+                 tr (Turkish), zh (Chinese)",
+            ),
+        ],
+        FieldId::CoThreads => threads_guidance("Cohere"),
+        FieldId::CoOnDemandLoading => on_demand_guidance("Cohere"),
+
         FieldId::WRemoteEndpoint => vec![
             heading("Whisper · remote endpoint"),
             Line::from(""),
@@ -1503,6 +1604,14 @@ fn model_guidance(engine: &str, current: &str) -> Vec<Line<'static>> {
          save, then run `voxtype setup model` to fetch the weights.",
         Style::default().fg(Color::Gray),
     )));
+    if engine == "cohere" {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "⚠ Cohere's int8 model is ~3 GB on disk — heaviest of the bundled \
+             engines. Make sure you've got the space before downloading.",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
     lines
 }
 
@@ -1535,6 +1644,7 @@ fn display_engine(engine: &str) -> &'static str {
         "paraformer" => "Paraformer",
         "dolphin" => "Dolphin",
         "omnilingual" => "Omnilingual",
+        "cohere" => "Cohere",
         _ => "Engine",
     }
 }
