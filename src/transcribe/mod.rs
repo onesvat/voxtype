@@ -24,6 +24,7 @@ pub mod worker;
     feature = "paraformer",
     feature = "dolphin",
     feature = "omnilingual",
+    feature = "cohere",
 ))]
 pub mod fbank;
 
@@ -33,6 +34,7 @@ pub mod fbank;
     feature = "paraformer",
     feature = "dolphin",
     feature = "omnilingual",
+    feature = "cohere",
 ))]
 pub mod ctc;
 
@@ -53,6 +55,11 @@ pub mod dolphin;
 
 #[cfg(feature = "omnilingual")]
 pub mod omnilingual;
+
+/// Cohere Transcribe backend (proof-of-concept, not wired into factory/CLI/config).
+/// See `src/transcribe/cohere.rs` for usage.
+#[cfg(feature = "cohere")]
+pub mod cohere;
 
 use crate::config::{Config, TranscriptionEngine, WhisperConfig, WhisperMode};
 use crate::error::TranscribeError;
@@ -199,6 +206,20 @@ pub fn create_transcriber(config: &Config) -> Result<Box<dyn Transcriber>, Trans
         #[cfg(not(feature = "omnilingual"))]
         TranscriptionEngine::Omnilingual => Err(TranscribeError::InitFailed(
             "Omnilingual engine requested but voxtype was not compiled with --features omnilingual"
+                .to_string(),
+        )),
+        #[cfg(feature = "cohere")]
+        TranscriptionEngine::Cohere => {
+            let cfg = config.cohere.as_ref().ok_or_else(|| {
+                TranscribeError::InitFailed(
+                    "Cohere engine selected but [cohere] config section is missing".to_string(),
+                )
+            })?;
+            Ok(Box::new(cohere::CohereTranscriber::new(cfg)?))
+        }
+        #[cfg(not(feature = "cohere"))]
+        TranscriptionEngine::Cohere => Err(TranscribeError::InitFailed(
+            "Cohere engine requested but voxtype was not compiled with --features cohere"
                 .to_string(),
         )),
     }
