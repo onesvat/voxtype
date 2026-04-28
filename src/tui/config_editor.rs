@@ -134,6 +134,13 @@ impl ConfigEditor {
         Some(current)
     }
 
+    /// Public read-only access to a table, for callers that need to iterate
+    /// arbitrary keys (e.g. the replacement-list editor walking
+    /// `[text.replacements]`).
+    pub fn raw_table(&self, dotted: &str) -> Option<&toml_edit::Table> {
+        self.table(dotted)
+    }
+
     pub fn get_string(&self, table: &str, key: &str) -> Option<String> {
         self.value(table, key)?.as_str().map(|s| s.to_string())
     }
