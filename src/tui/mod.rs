@@ -26,7 +26,10 @@ mod waybar_section;
 pub(crate) use config_editor::{ConfigEditor, EditorError};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -91,32 +94,38 @@ fn event_loop(terminal: &mut Tui, force_package_mode: bool) -> anyhow::Result<()
             }
             continue;
         }
-        if let Event::Key(key) = event::read()? {
-            if !matches!(
-                key.kind,
-                crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
-            ) {
-                continue;
-            }
+        match event::read()? {
+            Event::Key(key) => {
+                if !matches!(
+                    key.kind,
+                    crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
+                ) {
+                    continue;
+                }
 
-            // Global shortcuts handled before delegating to the focused pane.
-            if let Some(action) = handle_global_key(&mut app, key) {
+                // Global shortcuts handled before delegating to the focused pane.
+                if let Some(action) = handle_global_key(&mut app, key) {
+                    match dispatch_action(terminal, &mut app, action)? {
+                        LoopControl::Continue => continue,
+                        LoopControl::Quit => return Ok(()),
+                    }
+                }
+
+                let action = if app.sidebar_focused {
+                    handle_sidebar_key(&mut app, key)
+                } else {
+                    handle_section_key(&mut app, key)
+                };
+
                 match dispatch_action(terminal, &mut app, action)? {
-                    LoopControl::Continue => continue,
+                    LoopControl::Continue => {}
                     LoopControl::Quit => return Ok(()),
                 }
             }
-
-            let action = if app.sidebar_focused {
-                handle_sidebar_key(&mut app, key)
-            } else {
-                handle_section_key(&mut app, key)
-            };
-
-            match dispatch_action(terminal, &mut app, action)? {
-                LoopControl::Continue => {}
-                LoopControl::Quit => return Ok(()),
+            Event::Mouse(mouse) => {
+                handle_mouse(&mut app, mouse);
             }
+            _ => {}
         }
     }
 }
@@ -206,6 +215,34 @@ fn handle_sidebar_key(app: &mut App, key: KeyEvent) -> Action {
             Action::None
         }
         _ => Action::None,
+    }
+}
+
+fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    // Ignore mouse input while help overlay is open or a text field is editing.
+    if app.help_open || app.is_editing() {
+        return;
+    }
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return;
+    }
+
+    let col = mouse.column;
+    let row = mouse.row;
+
+    // Title bar occupies row 0; sidebar inner rows begin at absolute row 1.
+    if col < sidebar::WIDTH && row >= 1 {
+        let idx = (row - 1) as usize;
+        if idx < Section::ALL.len() {
+            app.sidebar_cursor = idx;
+            app.open_hovered_section();
+            app.focus_sidebar();
+        }
+        return;
+    }
+
+    if col >= sidebar::WIDTH {
+        app.focus_content();
     }
 }
 
