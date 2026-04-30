@@ -87,11 +87,13 @@ ENV ORT_LIB_LOCATION=/build/onnxruntime/build/Linux/Release
 COPY . /build/voxtype
 WORKDIR /build/voxtype
 
-# Disable LTO for faster builds. Build with all ONNX engines + MIGraphX so the
-# single voxtype-onnx-migraphx binary covers Parakeet, Moonshine, SenseVoice,
-# Paraformer, Dolphin, Omnilingual, and Cohere via AMD GPU acceleration.
+# Disable LTO for faster builds. The single voxtype-onnx-migraphx binary
+# bundles every ONNX engine, but MIGraphX EP registration only happens
+# for Parakeet — every other ONNX engine runs on CPU because MIGraphX 7.2
+# can't compile their graphs (per-engine notes in src/transcribe/*.rs and
+# Cargo.toml). Cohere is held back until an int4/FP16 model variant ships.
 RUN cargo build --release \
-        --features parakeet-migraphx,moonshine,sensevoice,paraformer,dolphin,omnilingual,cohere-migraphx,ml-diarization \
+        --features parakeet-migraphx,moonshine,sensevoice,paraformer,dolphin,omnilingual,cohere,ml-diarization \
         --config 'profile.release.lto=false' \
         --config 'profile.release.codegen-units=8' \
     && cp target/release/voxtype /tmp/voxtype-onnx-migraphx
