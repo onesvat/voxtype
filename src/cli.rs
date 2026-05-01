@@ -8,30 +8,39 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "voxtype")]
 #[command(author, version, about = "Push-to-talk voice-to-text for Linux")]
-#[command(long_about = "
-Voxtype is a push-to-talk voice-to-text tool for Linux.
-Optimized for Wayland, works on X11 too.
+#[command(long_about = "\
+Voxtype is a push-to-talk voice-to-text tool for Linux.\n\
+Optimized for Wayland, works on X11 too.")]
+#[command(after_help = "\
+QUICK START:
+  voxtype                     Start daemon with hotkey detection
+  voxtype record toggle       Toggle recording (for compositor keybindings)
+  voxtype setup model         Interactive model selection
+  voxtype setup gpu           Manage GPU acceleration
+  voxtype status --follow     Watch daemon status (Waybar integration)
 
-COMMANDS:
-  voxtype                  Start the daemon (with evdev hotkey detection)
-  voxtype daemon           Same as above
-  voxtype record toggle    Toggle recording (for compositor keybindings)
-  voxtype record start     Start recording
-  voxtype record stop      Stop recording and transcribe
-  voxtype status           Show daemon status (integrates with Waybar)
-  voxtype setup            Check dependencies and download models
-  voxtype config           Show current configuration
+See 'voxtype --help' for all options or 'man voxtype' for full docs.")]
+#[command(after_long_help = "\
+QUICK START:
+  voxtype                     Start daemon with hotkey detection
+  voxtype daemon              Same as above (explicit)
+  voxtype record toggle       Toggle recording (for compositor keybindings)
+  voxtype record start        Start recording
+  voxtype record stop         Stop recording and transcribe
+  voxtype record cancel       Cancel current recording
+  voxtype status              Show daemon status
+  voxtype setup               Check dependencies and download models
+  voxtype config              Show current configuration
 
 EXAMPLES:
-  voxtype setup model      Interactive model selection (Whisper, Parakeet, or Moonshine)
-  voxtype setup waybar     Show Waybar integration config
-  voxtype setup gpu        Manage GPU acceleration (Vulkan/CUDA/ROCm)
-  voxtype setup onnx       Switch between Whisper and ONNX engines
+  voxtype setup model         Interactive model selection (Whisper, Parakeet, or Moonshine)
+  voxtype setup waybar        Show Waybar integration config
+  voxtype setup gpu           Manage GPU acceleration (Vulkan/CUDA/MIGraphX)
+  voxtype setup onnx          Switch between Whisper and ONNX engines
   voxtype status --follow --format json   Waybar integration
 
 See 'voxtype <command> --help' for more info on a command.
-See 'man voxtype' or docs/INSTALL.md for setup instructions.
-")]
+See 'man voxtype' or docs/INSTALL.md for setup instructions.")]
 pub struct Cli {
     /// Path to config file
     #[arg(short, long, value_name = "FILE")]
@@ -45,32 +54,85 @@ pub struct Cli {
     #[arg(short, long)]
     pub quiet: bool,
 
-    /// Force clipboard mode (don't try to type)
-    #[arg(long)]
-    pub clipboard: bool,
+    // -- Transcription (engine-agnostic) --
 
-    /// Force paste mode (clipboard + Ctrl+V)
-    #[arg(long)]
-    pub paste: bool,
-
-    /// Restore clipboard content after paste mode completes
-    /// Saves clipboard before transcription and restores it after paste
-    #[arg(long)]
-    pub restore_clipboard: bool,
-
-    /// Delay in milliseconds after paste before restoring clipboard (default: 200)
-    #[arg(long, value_name = "MS")]
-    pub restore_clipboard_delay_ms: Option<u32>,
-
-    /// Override model for transcription.
-    /// Whisper: tiny, base, small, medium, large-v3, large-v3-turbo (and .en variants).
-    /// Parakeet: parakeet-tdt-0.6b-v3, parakeet-tdt-0.6b-v3-int8
-    #[arg(long, value_name = "MODEL")]
+    /// Override transcription model
+    #[arg(long, value_name = "MODEL", help_heading = "Transcription",
+        long_help = "Override model for transcription.\n\
+        Whisper: tiny, base, small, medium, large-v3, large-v3-turbo (and .en variants).\n\
+        Parakeet: parakeet-tdt-0.6b-v3, parakeet-tdt-0.6b-v3-int8")]
     pub model: Option<String>,
 
-    /// Override transcription engine: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual
-    #[arg(long, value_name = "ENGINE")]
+    /// Override transcription engine
+    #[arg(long, value_name = "ENGINE", help_heading = "Transcription",
+        long_help = "Override transcription engine: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, cohere")]
     pub engine: Option<String>,
+
+    /// Language for transcription (e.g., en, fr, auto, or comma-separated: en,fr,de)
+    #[arg(long, value_name = "LANG", help_heading = "Transcription")]
+    pub language: Option<String>,
+
+    /// Translate non-English speech to English
+    #[arg(long, help_heading = "Transcription")]
+    pub translate: bool,
+
+    /// Number of CPU threads for inference
+    #[arg(long, value_name = "N", help_heading = "Transcription")]
+    pub threads: Option<usize>,
+
+    /// Run transcription in a subprocess to release GPU memory after each recording
+    #[arg(long, help_heading = "Transcription", hide_short_help = true)]
+    pub gpu_isolation: bool,
+
+    /// GPU device index for multi-GPU systems (e.g., 1 for discrete GPU)
+    #[arg(long, value_name = "INDEX", help_heading = "Transcription", hide_short_help = true)]
+    pub gpu_device: Option<i32>,
+
+    /// Load model on-demand when recording starts instead of keeping it loaded
+    #[arg(long, help_heading = "Transcription", hide_short_help = true)]
+    pub on_demand_loading: bool,
+
+    /// Secondary model for difficult audio (used with --model-modifier)
+    #[arg(long, value_name = "MODEL", help_heading = "Transcription", hide_short_help = true)]
+    pub secondary_model: Option<String>,
+
+    /// Enable eager input processing (transcribe chunks while recording continues)
+    #[arg(long, help_heading = "Transcription", hide_short_help = true)]
+    pub eager_processing: bool,
+
+    // -- Whisper-specific --
+
+    /// Disable context window optimization for short recordings
+    #[arg(long, help_heading = "Whisper", hide_short_help = true)]
+    pub no_whisper_context_optimization: bool,
+
+    /// Initial prompt to provide context for transcription
+    #[arg(long, value_name = "PROMPT", help_heading = "Whisper", hide_short_help = true,
+        long_help = "Initial prompt to provide context for transcription.\n\
+        Hints at terminology, proper nouns, or formatting conventions.")]
+    pub initial_prompt: Option<String>,
+
+    /// Enable flash attention for reduced GPU memory usage and faster inference
+    #[arg(long, help_heading = "Whisper", hide_short_help = true)]
+    pub flash_attention: bool,
+
+    /// Whisper execution mode: local, remote, or cli
+    #[arg(long, value_name = "MODE", help_heading = "Whisper", hide_short_help = true)]
+    pub whisper_mode: Option<String>,
+
+    /// Remote server endpoint URL (for remote whisper mode)
+    #[arg(long, value_name = "URL", help_heading = "Whisper", hide_short_help = true)]
+    pub remote_endpoint: Option<String>,
+
+    /// Model name to send to remote server
+    #[arg(long, value_name = "MODEL", help_heading = "Whisper", hide_short_help = true)]
+    pub remote_model: Option<String>,
+
+    /// API key for remote server (or use VOXTYPE_WHISPER_API_KEY env var)
+    #[arg(long, value_name = "KEY", help_heading = "Whisper", hide_short_help = true)]
+    pub remote_api_key: Option<String>,
+
+    // -- Hotkey --
 
     /// Override hotkey (e.g., SCROLLLOCK, PAUSE, F13, MEDIA, WEV_234, EVTEST_226)
     #[arg(long, value_name = "KEY", help_heading = "Hotkey")]
@@ -92,61 +154,6 @@ pub struct Cli {
     #[arg(long, value_name = "KEY", help_heading = "Hotkey")]
     pub model_modifier: Option<String>,
 
-    // -- Whisper --
-
-    /// Disable context window optimization for short recordings
-    #[arg(long, help_heading = "Whisper")]
-    pub no_whisper_context_optimization: bool,
-
-    /// Initial prompt to provide context for transcription.
-    /// Hints at terminology, proper nouns, or formatting conventions.
-    #[arg(long, value_name = "PROMPT", help_heading = "Whisper")]
-    pub initial_prompt: Option<String>,
-
-    /// Language for transcription (e.g., en, fr, auto, or comma-separated: en,fr,de)
-    #[arg(long, value_name = "LANG", help_heading = "Whisper")]
-    pub language: Option<String>,
-
-    /// Translate non-English speech to English
-    #[arg(long, help_heading = "Whisper")]
-    pub translate: bool,
-
-    /// Number of CPU threads for inference
-    #[arg(long, value_name = "N", help_heading = "Whisper")]
-    pub threads: Option<usize>,
-
-    /// Run transcription in a subprocess to release GPU memory after each recording
-    #[arg(long, help_heading = "Whisper")]
-    pub gpu_isolation: bool,
-
-    /// Load model on-demand when recording starts instead of keeping it loaded
-    #[arg(long, help_heading = "Whisper")]
-    pub on_demand_loading: bool,
-
-    /// Whisper execution mode: local, remote, or cli
-    #[arg(long, value_name = "MODE", help_heading = "Whisper")]
-    pub whisper_mode: Option<String>,
-
-    /// Secondary model for difficult audio (used with --model-modifier)
-    #[arg(long, value_name = "MODEL", help_heading = "Whisper")]
-    pub secondary_model: Option<String>,
-
-    /// Enable eager input processing (transcribe chunks while recording continues)
-    #[arg(long, help_heading = "Whisper")]
-    pub eager_processing: bool,
-
-    /// Remote server endpoint URL (for remote whisper mode)
-    #[arg(long, value_name = "URL", help_heading = "Whisper")]
-    pub remote_endpoint: Option<String>,
-
-    /// Model name to send to remote server
-    #[arg(long, value_name = "MODEL", help_heading = "Whisper")]
-    pub remote_model: Option<String>,
-
-    /// API key for remote server (or use VOXTYPE_WHISPER_API_KEY env var)
-    #[arg(long, value_name = "KEY", help_heading = "Whisper")]
-    pub remote_api_key: Option<String>,
-
     // -- Audio --
 
     /// Audio input device name (or "default" for system default)
@@ -154,7 +161,7 @@ pub struct Cli {
     pub audio_device: Option<String>,
 
     /// Maximum recording duration in seconds (safety limit)
-    #[arg(long, value_name = "SECS", help_heading = "Audio")]
+    #[arg(long, value_name = "SECS", help_heading = "Audio", hide_short_help = true)]
     pub max_duration: Option<u32>,
 
     /// Enable audio feedback sounds (beeps when recording starts/stops)
@@ -162,28 +169,38 @@ pub struct Cli {
     pub audio_feedback: bool,
 
     /// Disable audio feedback sounds
-    #[arg(long, help_heading = "Audio")]
+    #[arg(long, help_heading = "Audio", hide_short_help = true)]
     pub no_audio_feedback: bool,
 
-    // -- Output --
+    /// Pause MPRIS media players during recording (requires playerctl)
+    #[arg(long, help_heading = "Audio", hide_short_help = true)]
+    pub pause_media: bool,
 
-    /// Delay before typing starts (ms), helps prevent first character drop
-    #[arg(long, value_name = "MS", help_heading = "Output")]
-    pub pre_type_delay: Option<u32>,
+    // -- Output (delivery, timing, file output, hooks) --
 
-    /// DEPRECATED: Use --pre-type-delay instead
-    #[arg(long, value_name = "MS", hide = true)]
-    pub wtype_delay: Option<u32>,
+    /// Force clipboard mode (don't try to type)
+    #[arg(long, help_heading = "Output")]
+    pub clipboard: bool,
 
-    /// Text to append after each transcription (e.g., " " for a trailing space).
-    /// Appended before auto_submit. Useful for separating sentences when dictating incrementally.
-    #[arg(long, value_name = "TEXT", help_heading = "Output")]
-    pub append_text: Option<String>,
+    /// Force paste mode (clipboard + Ctrl+V)
+    #[arg(long, help_heading = "Output")]
+    pub paste: bool,
 
-    /// Output driver order for type mode (comma-separated).
-    /// Available: wtype, dotool, ydotool, clipboard.
-    /// Example: --driver=ydotool,wtype,clipboard
-    #[arg(long, value_name = "DRIVERS", help_heading = "Output")]
+    /// Restore clipboard after paste mode
+    #[arg(long, help_heading = "Output",
+        long_help = "Restore clipboard content after paste mode completes.\n\
+        Saves clipboard before transcription and restores it after paste.")]
+    pub restore_clipboard: bool,
+
+    /// Delay in milliseconds after paste before restoring clipboard (default: 200)
+    #[arg(long, value_name = "MS", help_heading = "Output", hide_short_help = true)]
+    pub restore_clipboard_delay_ms: Option<u32>,
+
+    /// Output driver order (comma-separated)
+    #[arg(long, value_name = "DRIVERS", help_heading = "Output",
+        long_help = "Output driver order for type mode (comma-separated).\n\
+        Available: wtype, dotool, ydotool, clipboard.\n\
+        Example: --driver=ydotool,wtype,clipboard")]
     pub driver: Option<String>,
 
     /// Auto-submit (press Enter) after outputting transcribed text
@@ -191,64 +208,107 @@ pub struct Cli {
     pub auto_submit: bool,
 
     /// Disable auto-submit (overrides config auto_submit = true)
-    #[arg(long, conflicts_with = "auto_submit", help_heading = "Output")]
+    #[arg(long, conflicts_with = "auto_submit", help_heading = "Output", hide_short_help = true)]
     pub no_auto_submit: bool,
-
-    /// Convert newlines to Shift+Enter instead of regular Enter
-    #[arg(long, help_heading = "Output")]
-    pub shift_enter_newlines: bool,
-
-    /// Disable Shift+Enter newlines (overrides config)
-    #[arg(long, conflicts_with = "shift_enter_newlines", help_heading = "Output")]
-    pub no_shift_enter_newlines: bool,
-
-    /// Delay between typed characters in milliseconds (0 = fastest)
-    #[arg(long, value_name = "MS", help_heading = "Output")]
-    pub type_delay: Option<u32>,
 
     /// Fall back to clipboard if typing fails
     #[arg(long, help_heading = "Output")]
     pub fallback_to_clipboard: bool,
 
     /// Disable clipboard fallback
-    #[arg(long, conflicts_with = "fallback_to_clipboard", help_heading = "Output")]
+    #[arg(long, conflicts_with = "fallback_to_clipboard", help_heading = "Output", hide_short_help = true)]
     pub no_fallback_to_clipboard: bool,
 
-    /// Enable spoken punctuation conversion (e.g., say "period" to get ".")
-    #[arg(long, help_heading = "Output")]
-    pub spoken_punctuation: bool,
-
     /// Keystroke for paste mode (e.g., ctrl+v, shift+insert, ctrl+shift+v)
-    #[arg(long, value_name = "KEYS", help_heading = "Output")]
+    #[arg(long, value_name = "KEYS", help_heading = "Output", hide_short_help = true)]
     pub paste_keys: Option<String>,
-
-    /// Keyboard layout for dotool (e.g., de, fr)
-    #[arg(long, value_name = "LAYOUT", help_heading = "Output")]
-    pub dotool_xkb_layout: Option<String>,
-
-    /// Keyboard layout variant for dotool (e.g., nodeadkeys)
-    #[arg(long, value_name = "VARIANT", help_heading = "Output")]
-    pub dotool_xkb_variant: Option<String>,
 
     /// File path for file output mode
     #[arg(long, value_name = "PATH", help_heading = "Output")]
     pub file_path: Option<std::path::PathBuf>,
 
     /// File write mode: overwrite or append
-    #[arg(long, value_name = "MODE", help_heading = "Output")]
+    #[arg(long, value_name = "MODE", help_heading = "Output", hide_short_help = true)]
     pub file_mode: Option<String>,
 
+    /// Delay before typing starts (ms), helps prevent first character drop
+    #[arg(long, value_name = "MS", help_heading = "Output", hide_short_help = true)]
+    pub pre_type_delay: Option<u32>,
+
+    /// DEPRECATED: Use --pre-type-delay instead
+    #[arg(long, value_name = "MS", hide = true)]
+    pub wtype_delay: Option<u32>,
+
+    /// Prefix wtype output with a Shift key press/release
+    #[arg(long, help_heading = "Output", hide_short_help = true,
+        long_help = "Prefix wtype output with a Shift key press/release.\n\
+        Workaround for apps (e.g., Discord) that drop the first CJK character.")]
+    pub wtype_shift_prefix: bool,
+
+    /// Delay between typed characters in milliseconds (0 = fastest)
+    #[arg(long, value_name = "MS", help_heading = "Output", hide_short_help = true)]
+    pub type_delay: Option<u32>,
+
+    /// Keyboard layout for dotool (e.g., de, fr)
+    #[arg(long, value_name = "LAYOUT", help_heading = "Output", hide_short_help = true)]
+    pub dotool_xkb_layout: Option<String>,
+
+    /// Keyboard layout variant for dotool (e.g., nodeadkeys)
+    #[arg(long, value_name = "VARIANT", help_heading = "Output", hide_short_help = true)]
+    pub dotool_xkb_variant: Option<String>,
+
     /// Command to run before typing output (e.g., compositor submap switch)
-    #[arg(long, value_name = "CMD", help_heading = "Output")]
+    #[arg(long, value_name = "CMD", help_heading = "Output", hide_short_help = true)]
     pub pre_output_command: Option<String>,
 
     /// Command to run after typing output (e.g., reset compositor submap)
-    #[arg(long, value_name = "CMD", help_heading = "Output")]
+    #[arg(long, value_name = "CMD", help_heading = "Output", hide_short_help = true)]
     pub post_output_command: Option<String>,
 
     /// Command to run when recording starts (e.g., switch to compositor submap)
-    #[arg(long, value_name = "CMD", help_heading = "Output")]
+    #[arg(long, value_name = "CMD", help_heading = "Output", hide_short_help = true)]
     pub pre_recording_command: Option<String>,
+
+    // -- Text Processing --
+
+    /// Enable spoken punctuation conversion (e.g., say "period" to get ".")
+    #[arg(long, help_heading = "Text Processing")]
+    pub spoken_punctuation: bool,
+
+    /// Convert newlines to Shift+Enter instead of regular Enter
+    #[arg(long, help_heading = "Text Processing")]
+    pub shift_enter_newlines: bool,
+
+    /// Disable Shift+Enter newlines (overrides config)
+    #[arg(long, conflicts_with = "shift_enter_newlines", help_heading = "Text Processing", hide_short_help = true)]
+    pub no_shift_enter_newlines: bool,
+
+    /// Enable smart auto-submit (say "submit" to press Enter)
+    #[arg(long, help_heading = "Text Processing")]
+    pub smart_auto_submit: bool,
+
+    /// Disable smart auto-submit (overrides config)
+    #[arg(long, conflicts_with = "smart_auto_submit", help_heading = "Text Processing", hide_short_help = true)]
+    pub no_smart_auto_submit: bool,
+
+    /// Filter common filler words ("uh", "um", "er", ...) from transcribed text
+    #[arg(long, help_heading = "Text Processing")]
+    pub filter_fillers: bool,
+
+    /// Disable filler-word filtering (overrides config)
+    #[arg(
+        long,
+        conflicts_with = "filter_fillers",
+        help_heading = "Text Processing",
+        hide_short_help = true
+    )]
+    pub no_filter_fillers: bool,
+
+    /// Text to append after each transcription (e.g., " " for trailing space)
+    #[arg(long, value_name = "TEXT", help_heading = "Text Processing", hide_short_help = true,
+        long_help = "Text to append after each transcription (e.g., \" \" for a trailing space).\n\
+        Appended before auto_submit. Useful for separating sentences when dictating incrementally.")]
+    pub append_text: Option<String>,
 
     // -- VAD --
 
@@ -258,15 +318,15 @@ pub struct Cli {
 
     /// VAD speech detection threshold (0.0-1.0, default: 0.5).
     /// Lower = more sensitive, Higher = less sensitive
-    #[arg(long, value_name = "THRESHOLD", help_heading = "VAD")]
+    #[arg(long, value_name = "THRESHOLD", help_heading = "VAD", hide_short_help = true)]
     pub vad_threshold: Option<f32>,
 
     /// VAD backend: auto, energy, whisper
-    #[arg(long, value_name = "BACKEND", help_heading = "VAD")]
+    #[arg(long, value_name = "BACKEND", help_heading = "VAD", hide_short_help = true)]
     pub vad_backend: Option<String>,
 
     /// Minimum speech duration in milliseconds for VAD
-    #[arg(long, value_name = "MS", help_heading = "VAD")]
+    #[arg(long, value_name = "MS", help_heading = "VAD", hide_short_help = true)]
     pub vad_min_speech_ms: Option<u32>,
 
     #[command(subcommand)]
@@ -292,7 +352,7 @@ pub enum Commands {
         /// Path to audio file
         file: std::path::PathBuf,
 
-        /// Override transcription engine: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual
+        /// Override transcription engine: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, cohere
         #[arg(long, value_name = "ENGINE")]
         engine: Option<String>,
     },
@@ -345,6 +405,19 @@ pub enum Commands {
     /// Show current configuration
     Config,
 
+    /// Inspect runtime/install information
+    Info {
+        #[command(subcommand)]
+        action: InfoAction,
+    },
+
+    /// Open the interactive configuration TUI
+    Configure {
+        /// Render as if installed from a package (for testing source builds).
+        #[arg(long, hide = true)]
+        force_package_mode: bool,
+    },
+
     /// Show daemon status (for Waybar/polybar integration)
     Status {
         /// Continuously output status changes as JSON (for Waybar exec)
@@ -370,7 +443,7 @@ pub enum Commands {
         action: RecordAction,
     },
 
-    /// Meeting transcription mode (Pro feature)
+    /// Meeting transcription mode
     ///
     /// Continuous meeting transcription with chunked processing,
     /// speaker attribution, and export capabilities.
@@ -437,6 +510,14 @@ pub enum RecordAction {
         /// Disable Shift+Enter newlines for this transcription (overrides config)
         #[arg(long, conflicts_with = "shift_enter_newlines")]
         no_shift_enter_newlines: bool,
+
+        /// Enable smart auto-submit for this recording (say "submit" to press Enter)
+        #[arg(long, conflicts_with = "no_smart_auto_submit")]
+        smart_auto_submit: bool,
+
+        /// Disable smart auto-submit for this recording
+        #[arg(long, conflicts_with = "smart_auto_submit")]
+        no_smart_auto_submit: bool,
     },
     /// Stop recording and transcribe (send SIGUSR2 to daemon)
     Stop {
@@ -495,6 +576,14 @@ pub enum RecordAction {
         /// Disable Shift+Enter newlines for this transcription (overrides config)
         #[arg(long, conflicts_with = "shift_enter_newlines")]
         no_shift_enter_newlines: bool,
+
+        /// Enable smart auto-submit for this recording (say "submit" to press Enter)
+        #[arg(long, conflicts_with = "no_smart_auto_submit")]
+        smart_auto_submit: bool,
+
+        /// Disable smart auto-submit for this recording (overrides config)
+        #[arg(long, conflicts_with = "smart_auto_submit")]
+        no_smart_auto_submit: bool,
     },
     /// Cancel current recording or transcription (discard without output)
     Cancel,
@@ -716,6 +805,42 @@ impl RecordAction {
             None
         }
     }
+
+    /// Get the smart auto-submit override from --smart-auto-submit / --no-smart-auto-submit flags
+    /// Returns Some(true) to enable, Some(false) to disable, None if not specified
+    pub fn smart_auto_submit_override(&self) -> Option<bool> {
+        let (enable, disable) = match self {
+            RecordAction::Start {
+                smart_auto_submit,
+                no_smart_auto_submit,
+                ..
+            } => (*smart_auto_submit, *no_smart_auto_submit),
+            RecordAction::Toggle {
+                smart_auto_submit,
+                no_smart_auto_submit,
+                ..
+            } => (*smart_auto_submit, *no_smart_auto_submit),
+            RecordAction::Stop { .. } | RecordAction::Cancel => return None,
+        };
+
+        if enable {
+            Some(true)
+        } else if disable {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub enum InfoAction {
+    /// Show installed binary variants and which one is active
+    Variants {
+        /// Emit machine-readable JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -836,7 +961,7 @@ pub enum SetupAction {
         restart: bool,
     },
 
-    /// Manage GPU acceleration (Vulkan for Whisper, CUDA/ROCm for Parakeet)
+    /// Manage GPU acceleration (Vulkan for Whisper, CUDA/MIGraphX for Parakeet)
     Gpu {
         /// Enable GPU acceleration (auto-detects best backend)
         #[arg(long)]
@@ -849,6 +974,14 @@ pub enum SetupAction {
         /// Show current backend status
         #[arg(long)]
         status: bool,
+    },
+
+    /// Switch the active binary variant (used by `voxtype configure` via pkexec)
+    #[command(hide = true)]
+    Variant {
+        /// Variant binary name (e.g., voxtype-avx512, voxtype-onnx-cuda)
+        #[arg(long, value_name = "NAME")]
+        to: String,
     },
 
     /// Switch between Whisper and ONNX transcription engines
@@ -1776,6 +1909,91 @@ mod tests {
             Some(Commands::Record { action }) => {
                 assert_eq!(action.auto_submit_override(), None);
                 assert_eq!(action.shift_enter_newlines_override(), None);
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    // =========================================================================
+    // Smart auto-submit flag tests
+    // =========================================================================
+
+    #[test]
+    fn test_record_start_smart_auto_submit_enable() {
+        let cli = Cli::parse_from(["voxtype", "record", "start", "--smart-auto-submit"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(action.smart_auto_submit_override(), Some(true));
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_record_start_no_smart_auto_submit() {
+        let cli = Cli::parse_from(["voxtype", "record", "start", "--no-smart-auto-submit"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(action.smart_auto_submit_override(), Some(false));
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_record_start_smart_auto_submit_mutual_exclusion() {
+        let result = Cli::try_parse_from([
+            "voxtype",
+            "record",
+            "start",
+            "--smart-auto-submit",
+            "--no-smart-auto-submit",
+        ]);
+        assert!(
+            result.is_err(),
+            "Should not allow both flags simultaneously"
+        );
+    }
+
+    #[test]
+    fn test_record_start_smart_auto_submit_no_flags_returns_none() {
+        let cli = Cli::parse_from(["voxtype", "record", "start"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(action.smart_auto_submit_override(), None);
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_record_toggle_smart_auto_submit_enable() {
+        let cli = Cli::parse_from(["voxtype", "record", "toggle", "--smart-auto-submit"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(action.smart_auto_submit_override(), Some(true));
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_record_toggle_no_smart_auto_submit() {
+        let cli = Cli::parse_from(["voxtype", "record", "toggle", "--no-smart-auto-submit"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(action.smart_auto_submit_override(), Some(false));
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_record_stop_has_no_smart_auto_submit_override() {
+        let cli = Cli::parse_from(["voxtype", "record", "stop"]);
+        match cli.command {
+            Some(Commands::Record { action }) => {
+                assert_eq!(action.smart_auto_submit_override(), None);
             }
             _ => panic!("Expected Record command"),
         }

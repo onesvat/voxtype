@@ -18,9 +18,12 @@ use tokio::sync::mpsc;
 /// Hotkey events that can be sent from the listener
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotkeyEvent {
-    /// The hotkey was pressed (model_override not supported on macOS, always None)
+    /// The hotkey was pressed. model_override / profile_override are not yet
+    /// surfaced from the macOS rdev backend — always None today, but the field
+    /// matches the Linux variant so the daemon match arms stay platform-agnostic.
     Pressed {
         model_override: Option<String>,
+        profile_override: Option<String>,
     },
     Released,
     Cancel,
@@ -137,6 +140,7 @@ impl HotkeyListener for RdevHotkeyListener {
                                 *last = Instant::now();
                                 let _ = tx_clone.blocking_send(HotkeyEvent::Pressed {
                                     model_override: None,
+                                    profile_override: None,
                                 });
                             }
                         } else if Some(key) == cancel_key {

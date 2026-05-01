@@ -56,6 +56,84 @@ sleep 2
 voxtype record stop
 ```
 
+## Smart Auto-Submit
+
+Tests the `smart_auto_submit` feature: saying "submit" at the end of dictation
+strips the word and presses Enter.
+
+### Config-based
+
+```bash
+# 1. Enable in config.toml:
+#    [text]
+#    smart_auto_submit = true
+
+# 2. Restart daemon
+systemctl --user restart voxtype
+
+# 3. Record and say "hello world submit" (or "hello world submit.")
+voxtype record start
+sleep 4
+voxtype record stop
+
+# 4. Expected: "hello world" is typed and Enter is pressed
+#
+# To verify via logs, the daemon must be running with debug logging (-v):
+#   journalctl --user -u voxtype --since "30 seconds ago" | grep "Smart auto-submit triggered"
+# At default log level the trigger fires silently - verify by observing Enter being pressed.
+```
+
+### CLI override (per-recording)
+
+```bash
+# Force on for this recording (even if config has smart_auto_submit = false)
+voxtype record start --smart-auto-submit
+sleep 4
+voxtype record stop
+# Say "hello world submit" - should type "hello world" and press Enter
+
+# Force off for this recording (even if config has smart_auto_submit = true)
+voxtype record start --no-smart-auto-submit
+sleep 4
+voxtype record stop
+# Say "hello world submit" - "submit" should remain in output, no Enter pressed
+```
+
+### Environment variable
+
+```bash
+# Stop the managed daemon first to avoid running two daemons simultaneously
+systemctl --user stop voxtype
+
+# Start a temporary daemon with the env var
+VOXTYPE_SMART_AUTO_SUBMIT=true voxtype daemon &
+DAEMON_PID=$!
+sleep 2
+
+voxtype record start && sleep 4 && voxtype record stop
+# Say "hello world submit" - should type "hello world" and press Enter
+
+# Clean up: stop the temp daemon and restart the managed one
+kill $DAEMON_PID
+systemctl --user start voxtype
+```
+
+### Negative cases
+
+```bash
+# "submitted" (partial word) should NOT trigger
+voxtype record start --smart-auto-submit
+sleep 4
+voxtype record stop
+# Say "I submitted the form" - full text including "submitted" should appear, no Enter
+
+# "submit" in the middle should NOT trigger
+voxtype record start --smart-auto-submit
+sleep 4
+voxtype record stop
+# Say "please submit this form now" - full text should appear, no Enter
+```
+
 ## File Output
 
 Tests the file output mode for writing transcriptions to files instead of typing.
@@ -1087,6 +1165,260 @@ done
 
 # Verify clean restarts in logs:
 journalctl --user -u voxtype --since "1 minute ago" | grep -E "Starting|Ready|shutdown"
+```
+
+## v0.6.6 Feature Verification
+
+Tests for bug fixes and enhancements introduced in v0.6.6.
+
+### Text Replacements with Spoken Punctuation (#172)
+
+Verifies that text replacements match spoken words before punctuation conversion.
+
+```bash
+# Unit tests (no mic needed)
+cargo test replacements_match_spoken -- --nocapture
+cargo test replacements_with_multiple -- --nocapture
+# Expected: both tests pass
+
+# Runtime test (requires mic and config change):
+# 1. Add to config.toml:
+#    [text]
+#    spoken_punctuation = true
+#    replacements = [
+#      { from = "slash pr", to = "/pr" },
+#    ]
+# 2. Restart daemon, record "slash pr one two three"
+# Expected: "/pr one two three" (not "/ pr one two three")
+```
+
+### Remote Backend initial_prompt (#278)
+
+Verifies that initial_prompt is forwarded to remote transcription endpoints.
+
+```bash
+# Unit tests (no remote server needed)
+cargo test multipart_body_includes_prompt -- --nocapture
+cargo test multipart_body_excludes -- --nocapture
+# Expected: all 3 tests pass (includes, excludes_empty, excludes_when_none)
+```
+
+### Ydotool Socket Detection (#306)
+
+Verifies ydotool socket is found at non-standard paths (Fedora).
+
+```bash
+# Unit tests
+cargo test find_ydotool_socket -- --nocapture
+# Expected: 2 tests pass (env override and returns_none)
+
+# Structural verification
+grep -c "find_ydotool_socket" src/output/ydotool.rs src/output/paste.rs
+# Expected: references in both files
+```
+
+### Eitype in Paste Mode (#259)
+
+Verifies eitype is in the paste mode Ctrl+V simulation chain.
+
+```bash
+# Structural verification
+grep -c "simulate_paste_eitype\|is_eitype_available" src/output/paste.rs
+# Expected: 6+ references
+
+# Runtime test (requires eitype installed):
+# 1. Set mode = "paste" in config.toml
+# 2. Hide wtype: sudo mv /usr/bin/wtype /usr/bin/wtype.bak
+# 3. Record and transcribe
+# 4. Check logs: journalctl --user -u voxtype --since "30 seconds ago" | grep -i eitype
+# 5. Restore: sudo mv /usr/bin/wtype.bak /usr/bin/wtype
+```
+
+### Duplicate Notification Fix (#268)
+
+Verifies driver-level notifications were removed (daemon handles them).
+
+```bash
+# Structural verification - no notify code in drivers
+echo "ydotool.rs:" $(grep -c "send_notification\|self\.notify" src/output/ydotool.rs)
+echo "dotool.rs:" $(grep -c "send_notification\|self\.notify" src/output/dotool.rs)
+echo "clipboard.rs:" $(grep -c "send_notification\|self\.notify" src/output/clipboard.rs)
+echo "xclip.rs:" $(grep -c "send_notification\|self\.notify" src/output/xclip.rs)
+# Expected: all 0
+
+# Runtime test (requires on_transcription = true):
+# 1. Set [output.notification] on_transcription = true in config.toml
+# 2. Restart daemon, record and transcribe
+# 3. Verify exactly ONE notification appears (not two)
+```
+
+### Xclip Clipboard Fallback on X11 (#256)
+
+Verifies xclip is in the clipboard mode output chain.
+
+```bash
+# Structural verification
+grep -A5 "OutputMode::Clipboard =>" src/output/mod.rs | grep -c "XclipOutput"
+# Expected: 1
+
+# Config verification
+voxtype config 2>&1 | grep -A10 "Output Chain"
+# Expected: shows wl-copy and xclip detection status
+```
+
+### KDE Plasma Compositor Docs (#296)
+
+Verifies KDE Plasma keybinding docs are present.
+
+```bash
+grep -c "KWin\|KDE Plasma" README.md docs/USER_MANUAL.md docs/CONFIGURATION.md
+# Expected: matches in all three files
+```
+
+### Audio Feedback on Transcription Completion (#258)
+
+Verifies the TranscriptionComplete sound event exists and is wired in.
+
+```bash
+# Structural verification
+grep -c "TranscriptionComplete" src/audio/feedback.rs src/daemon.rs
+# Expected: 2+ in feedback.rs, 2+ in daemon.rs
+
+# Runtime test (requires audio feedback enabled):
+# 1. Set [audio.feedback] enabled = true, theme = "default" in config.toml
+# 2. Restart daemon
+# 3. Record and transcribe
+# Expected: THREE distinct sounds - start beep, stop beep, completion ping
+# Previously only start and stop played
+```
+
+### MPRIS Media Player Pause (#249)
+
+Verifies the pause_media feature is wired up.
+
+```bash
+# CLI flag exists
+voxtype record start --help 2>&1 | grep -i "pause.media"
+# Expected: --pause-media flag shown
+
+# Config field exists
+grep -c "pause_media" src/config.rs
+# Expected: 4+ references
+
+# Module exists
+test -f src/audio/media.rs && echo "media.rs exists" || echo "MISSING"
+# Expected: media.rs exists
+
+# Runtime test (requires playerctl and a media player):
+# 1. Start playing music (Spotify, Firefox video, mpv, etc.)
+# 2. playerctl status  # Should show "Playing"
+# 3. Set [audio] pause_media = true in config.toml, restart daemon
+# 4. voxtype record start
+# 5. playerctl status  # Should show "Paused"
+# 6. sleep 3 && voxtype record stop
+# 7. Wait for transcription, then: playerctl status  # Should show "Playing"
+```
+
+### Post-Process trim and fallback_on_empty (#270)
+
+Verifies the post-process trim / fallback_on_empty config options end-to-end.
+
+#### Unit-level (fast)
+
+```bash
+# Behavior covered by tests in src/output/post_process.rs:
+cargo test --lib output::post_process
+# Expected: 21 passed (covers all four trim×fallback combinations
+# plus whitespace-only output, multiline, unicode, timeout, etc.)
+```
+
+#### End-to-end · trim = true (default)
+
+```bash
+# 1. Set up a post-process command that emits trailing whitespace.
+#    Backup the existing config first.
+cp ~/.config/voxtype/config.toml ~/.config/voxtype/config.toml.bak
+
+cat >> ~/.config/voxtype/config.toml <<'EOF'
+
+[post_process]
+command = "sed 's/$/   /'"
+trim = true
+fallback_on_empty = true
+EOF
+
+systemctl --user restart voxtype
+
+# 2. Switch output mode to file so the result is observable.
+voxtype record start --file=/tmp/voxtype-trim.txt
+sleep 2 && say-something-out-loud
+voxtype record stop --file=/tmp/voxtype-trim.txt
+
+# 3. Verify trailing whitespace was trimmed.
+xxd /tmp/voxtype-trim.txt | tail -1
+# Expected: line ends with the last spoken word's bytes, no
+# trailing 0x20 0x20 0x20 (the spaces sed appended).
+
+# 4. Restore config.
+cp ~/.config/voxtype/config.toml.bak ~/.config/voxtype/config.toml
+systemctl --user restart voxtype
+```
+
+#### End-to-end · fallback_on_empty = true
+
+```bash
+# 1. Configure a post-process command that always returns empty.
+cat >> ~/.config/voxtype/config.toml <<'EOF'
+
+[post_process]
+command = "true"   # exit 0, emit nothing
+trim = true
+fallback_on_empty = true
+EOF
+
+systemctl --user restart voxtype
+
+# 2. Record and stop.
+voxtype record start --file=/tmp/voxtype-fallback.txt
+sleep 2 && say-something-out-loud
+voxtype record stop --file=/tmp/voxtype-fallback.txt
+
+# 3. The transcript should still appear — fallback kept the original
+#    text instead of the empty post-process output.
+cat /tmp/voxtype-fallback.txt
+# Expected: non-empty file containing the spoken words.
+```
+
+#### End-to-end · fallback_on_empty = false
+
+```bash
+# 1. Same command, but flip fallback off.
+cat >> ~/.config/voxtype/config.toml <<'EOF'
+
+[post_process]
+command = "true"
+trim = true
+fallback_on_empty = false
+EOF
+
+systemctl --user restart voxtype
+
+# 2. Record and stop.
+voxtype record start --file=/tmp/voxtype-no-fallback.txt
+sleep 2 && say-something-out-loud
+voxtype record stop --file=/tmp/voxtype-no-fallback.txt
+
+# 3. The transcript should be empty — fallback disabled, post-process
+#    returned nothing, no fallback to original.
+test ! -s /tmp/voxtype-no-fallback.txt && echo "PASS: empty output"
+# Expected: PASS
+```
+
+#### Structural verification
+
+```bash
+grep -c "trim\|fallback_on_empty" src/output/post_process.rs
+# Expected: 10+ references
 ```
 
 ## Quick Smoke Test Script

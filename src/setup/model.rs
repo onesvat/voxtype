@@ -98,6 +98,31 @@ struct ParakeetModelInfo {
 
 const PARAKEET_MODELS: &[ParakeetModelInfo] = &[
     ParakeetModelInfo {
+        name: "parakeet-tdt-0.6b-v2",
+        size_mb: 2400,
+        description: "TDT English-only, best English accuracy",
+        files: &[
+            ("encoder-model.onnx", 41_770_866),
+            ("encoder-model.onnx.data", 2_435_420_160),
+            ("decoder_joint-model.onnx", 35_792_059),
+            ("vocab.txt", 9_384),
+            ("config.json", 97),
+        ],
+        huggingface_repo: "istupakov/parakeet-tdt-0.6b-v2-onnx",
+    },
+    ParakeetModelInfo {
+        name: "parakeet-tdt-0.6b-v2-int8",
+        size_mb: 640,
+        description: "TDT English-only quantized, smaller/faster",
+        files: &[
+            ("encoder-model.int8.onnx", 652_184_014),
+            ("decoder_joint-model.int8.onnx", 8_998_286),
+            ("vocab.txt", 9_384),
+            ("config.json", 97),
+        ],
+        huggingface_repo: "istupakov/parakeet-tdt-0.6b-v2-onnx",
+    },
+    ParakeetModelInfo {
         name: "parakeet-tdt-0.6b-v3",
         size_mb: 2600,
         description: "TDT model with punctuation (recommended)",
@@ -419,6 +444,49 @@ const OMNILINGUAL_MODELS: &[OmnilingualModelInfo] = &[OmnilingualModelInfo {
 }];
 
 // =============================================================================
+// Cohere Transcribe Model Definitions
+// =============================================================================
+// Encoder-decoder ASR via ONNX Runtime, Whisper-style task tokens. Currently
+// #1 on the Open ASR Leaderboard. The original CohereLabs weights are gated
+// on HuggingFace; we use the community ONNX export which is Apache 2.0 and
+// does not require an HF token. Each model is 5 files (encoder + decoder
+// .onnx structural files, their .data weight sidecars, and tokens.txt).
+
+struct CohereModelInfo {
+    name: &'static str,
+    dir_name: &'static str,
+    size_mb: u32,
+    description: &'static str,
+    languages: &'static str,
+    files: &'static [(&'static str, &'static str)],
+    huggingface_repo: &'static str,
+}
+
+const COHERE_MODELS: &[CohereModelInfo] = &[CohereModelInfo {
+    name: "int8",
+    dir_name: "cohere-transcribe-int8",
+    // 6 MB encoder structure + 2.8 GB encoder weights + 0.5 MB decoder
+    // structure + 220 MB decoder weights + 270 KB tokens. Round up.
+    size_mb: 3100,
+    description: "Encoder-decoder ASR, #1 Open ASR Leaderboard",
+    languages: "ar,de,en,es,fr,hi,it,ja,ko,nl,pt,ru,tr,zh",
+    files: &[
+        ("cohere-encoder.int8.onnx", "cohere-encoder.int8.onnx"),
+        (
+            "cohere-encoder.int8.onnx.data",
+            "cohere-encoder.int8.onnx.data",
+        ),
+        ("cohere-decoder.int8.onnx", "cohere-decoder.int8.onnx"),
+        (
+            "cohere-decoder.int8.onnx.data",
+            "cohere-decoder.int8.onnx.data",
+        ),
+        ("tokens.txt", "tokens.txt"),
+    ],
+    huggingface_repo: "cstr/cohere-transcribe-onnx-int8",
+}];
+
+// =============================================================================
 // Whisper Model Functions
 // =============================================================================
 
@@ -450,6 +518,7 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     let is_paraformer_engine = matches!(config.engine, TranscriptionEngine::Paraformer);
     let is_dolphin_engine = matches!(config.engine, TranscriptionEngine::Dolphin);
     let is_omnilingual_engine = matches!(config.engine, TranscriptionEngine::Omnilingual);
+    let is_cohere_engine = matches!(config.engine, TranscriptionEngine::Cohere);
     let current_whisper_model = &config.whisper.model;
     let current_parakeet_model = config.parakeet.as_ref().map(|p| p.model.as_str());
     let current_moonshine_model = config.moonshine.as_ref().map(|m| m.model.as_str());
@@ -457,12 +526,14 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     let current_paraformer_model = config.paraformer.as_ref().map(|p| p.model.as_str());
     let current_dolphin_model = config.dolphin.as_ref().map(|d| d.model.as_str());
     let current_omnilingual_model = config.omnilingual.as_ref().map(|o| o.model.as_str());
+    let current_cohere_model = config.cohere.as_ref().map(|c| c.model.as_str());
     let parakeet_available = cfg!(feature = "parakeet");
     let moonshine_available = cfg!(feature = "moonshine");
     let sensevoice_available = cfg!(feature = "sensevoice");
     let paraformer_available = cfg!(feature = "paraformer");
     let dolphin_available = cfg!(feature = "dolphin");
     let omnilingual_available = cfg!(feature = "omnilingual");
+    let cohere_available = cfg!(feature = "cohere");
     let whisper_count = MODELS.len();
     let parakeet_count = PARAKEET_MODELS.len();
     let moonshine_count = MOONSHINE_MODELS.len();
@@ -470,6 +541,7 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     let paraformer_count = PARAFORMER_MODELS.len();
     let dolphin_count = DOLPHIN_MODELS.len();
     let omnilingual_count = OMNILINGUAL_MODELS.len();
+    let cohere_count = COHERE_MODELS.len();
 
     let available_count = |available: bool, count: usize| if available { count } else { 0 };
     let total_count = whisper_count
@@ -478,7 +550,8 @@ pub async fn interactive_select() -> anyhow::Result<()> {
         + available_count(sensevoice_available, sensevoice_count)
         + available_count(paraformer_available, paraformer_count)
         + available_count(dolphin_available, dolphin_count)
-        + available_count(omnilingual_available, omnilingual_count);
+        + available_count(omnilingual_available, omnilingual_count)
+        + available_count(cohere_available, cohere_count);
 
     // --- Whisper Section ---
     println!("--- Whisper (OpenAI, 99+ languages) ---\n");
@@ -726,6 +799,40 @@ pub async fn interactive_select() -> anyhow::Result<()> {
         println!("  \x1b[90m(not available - rebuild with --features omnilingual)\x1b[0m");
     }
 
+    // --- Cohere Section ---
+    let cohere_offset =
+        omnilingual_offset + available_count(omnilingual_available, omnilingual_count);
+    println!("\n--- Cohere Transcribe (Cohere Labs, #1 Open ASR Leaderboard) ---\n");
+
+    if cohere_available {
+        for (i, model) in COHERE_MODELS.iter().enumerate() {
+            let model_path = models_dir.join(model.dir_name);
+            let installed = model_path.exists() && validate_cohere_model(&model_path).is_ok();
+
+            let is_current = is_cohere_engine && current_cohere_model == Some(model.dir_name);
+            let star = if is_current { "*" } else { " " };
+
+            let status = if installed {
+                "\x1b[32m[installed]\x1b[0m"
+            } else {
+                ""
+            };
+
+            println!(
+                " {}[{:>2}] {:<28} ({:>4} MB) {} - {} {}",
+                star,
+                cohere_offset + i + 1,
+                model.dir_name,
+                model.size_mb,
+                model.languages,
+                model.description,
+                status
+            );
+        }
+    } else {
+        println!("  \x1b[90m(not available - rebuild with --features cohere)\x1b[0m");
+    }
+
     println!("\n  [ 0] Cancel\n");
 
     // Get user selection
@@ -790,6 +897,9 @@ pub async fn interactive_select() -> anyhow::Result<()> {
             validate_onnx_ctc_model,
         )
         .await
+    } else if cohere_available && selection <= cohere_offset + cohere_count {
+        let idx = selection - cohere_offset;
+        handle_cohere_selection(idx).await
     } else {
         println!("\nInvalid selection.");
         Ok(())
@@ -1060,6 +1170,11 @@ pub fn download_model(model_name: &str) -> anyhow::Result<()> {
 const GTCRN_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx";
 const GTCRN_MODEL_FILENAME: &str = "gtcrn_simple.onnx";
 
+/// ECAPA-TDNN speaker embedding model URL and filename
+const ECAPA_MODEL_URL: &str =
+    "https://huggingface.co/pranjal-pravesh/ecapa_tdnn_onnx/resolve/main/ecapa_tdnn.onnx";
+const ECAPA_MODEL_FILENAME: &str = "ecapa_tdnn.onnx";
+
 /// Ensure the GTCRN speech enhancement model is downloaded.
 /// Returns the path to the model file if available, or None if download fails.
 pub fn ensure_gtcrn_model() -> Option<std::path::PathBuf> {
@@ -1100,6 +1215,52 @@ pub fn ensure_gtcrn_model() -> Option<std::path::PathBuf> {
         }
         Err(_) => {
             eprintln!("Warning: curl not available. Speech enhancement model not downloaded.");
+            None
+        }
+    }
+}
+
+/// Ensure the ECAPA-TDNN speaker embedding model is downloaded.
+/// Returns the path to the model file if available, or None if download fails.
+/// Used by ML-based speaker diarization in meeting mode.
+pub fn ensure_ecapa_model() -> Option<std::path::PathBuf> {
+    let models_dir = Config::models_dir();
+    let model_path = models_dir.join(ECAPA_MODEL_FILENAME);
+
+    if model_path.exists() {
+        return Some(model_path);
+    }
+
+    // Ensure directory exists
+    if let Err(e) = std::fs::create_dir_all(&models_dir) {
+        eprintln!("Warning: Could not create models directory: {}", e);
+        return None;
+    }
+
+    println!("Downloading ECAPA-TDNN speaker embedding model (~26 MB)...");
+
+    let status = Command::new("curl")
+        .args([
+            "-L",
+            "--progress-bar",
+            "-o",
+            model_path.to_str().unwrap_or(ECAPA_MODEL_FILENAME),
+            ECAPA_MODEL_URL,
+        ])
+        .status();
+
+    match status {
+        Ok(exit_status) if exit_status.success() => {
+            println!("Speaker embedding model downloaded.");
+            Some(model_path)
+        }
+        Ok(_) => {
+            eprintln!("Warning: Failed to download speaker embedding model. ML diarization will fall back to simple speaker attribution.");
+            let _ = std::fs::remove_file(&model_path);
+            None
+        }
+        Err(_) => {
+            eprintln!("Warning: curl not available. Speaker embedding model not downloaded.");
             None
         }
     }
@@ -1493,8 +1654,8 @@ fn update_parakeet_in_config(config: &str, model_name: &str) -> String {
 
 /// List installed Parakeet models
 pub fn list_installed_parakeet() {
-    println!("\nInstalled Parakeet Models (EXPERIMENTAL)\n");
-    println!("=========================================\n");
+    println!("\nInstalled Parakeet Models\n");
+    println!("=========================\n");
 
     let models_dir = Config::models_dir();
 
@@ -1651,6 +1812,275 @@ fn download_moonshine_model_by_info(model: &MoonshineModelInfo) -> anyhow::Resul
     ));
 
     Ok(())
+}
+
+// =============================================================================
+// Cohere Transcribe Functions
+// =============================================================================
+
+/// Validate that a Cohere model directory has the required five files.
+pub fn validate_cohere_model(path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("Model directory does not exist: {:?}", path);
+    }
+    let required = [
+        "cohere-encoder.int8.onnx",
+        "cohere-encoder.int8.onnx.data",
+        "cohere-decoder.int8.onnx",
+        "cohere-decoder.int8.onnx.data",
+        "tokens.txt",
+    ];
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|f| !path.join(f).exists())
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!("Incomplete Cohere model, missing: {}", missing.join(", "))
+    }
+}
+
+/// Download a Cohere model by name (public API for run_setup).
+pub fn download_cohere_model(model_name: &str) -> anyhow::Result<()> {
+    let model = COHERE_MODELS
+        .iter()
+        .find(|m| m.name == model_name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown Cohere model: {}", model_name))?;
+    download_cohere_model_by_info(model)
+}
+
+/// Download a Cohere model using its info struct.
+fn download_cohere_model_by_info(model: &CohereModelInfo) -> anyhow::Result<()> {
+    let models_dir = Config::models_dir();
+    let model_path = models_dir.join(model.dir_name);
+    std::fs::create_dir_all(&model_path)?;
+
+    // Cohere is a multi-GB download. Even with a fast connection it's a
+    // visible commitment, and on slow links it can mean 30+ minutes. Print
+    // the size up front so users don't wonder why their disk is filling.
+    println!(
+        "\nDownloading {} ({} MB across {} files)...",
+        model.dir_name,
+        model.size_mb,
+        model.files.len()
+    );
+    println!(
+        "This is the largest model voxtype ships. Ensure you have at least \
+         {} MB of free space in {}.\n",
+        // Add 10% headroom for filesystem overhead.
+        model.size_mb + (model.size_mb / 10),
+        model_path.display(),
+    );
+
+    for (repo_path, local_filename) in model.files {
+        let file_path = model_path.join(local_filename);
+
+        if file_path.exists() {
+            println!("  {} already exists, skipping", local_filename);
+            continue;
+        }
+
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            model.huggingface_repo, repo_path
+        );
+
+        println!("Downloading {}...", local_filename);
+
+        let status = Command::new("curl")
+            .args([
+                "-L",
+                "--progress-bar",
+                "-o",
+                file_path.to_str().unwrap_or("file"),
+                &url,
+            ])
+            .status();
+
+        match status {
+            Ok(exit_status) if exit_status.success() => {}
+            Ok(exit_status) => {
+                print_failure(&format!(
+                    "Download failed: curl exited with code {}",
+                    exit_status.code().unwrap_or(-1)
+                ));
+                let _ = std::fs::remove_file(&file_path);
+                anyhow::bail!("Download failed for {}", local_filename)
+            }
+            Err(e) => {
+                print_failure(&format!("Failed to run curl: {}", e));
+                print_info("Please ensure curl is installed (e.g., 'sudo pacman -S curl')");
+                anyhow::bail!("curl not available: {}", e)
+            }
+        }
+    }
+
+    validate_cohere_model(&model_path)?;
+    print_success(&format!(
+        "Model '{}' downloaded to {:?}",
+        model.dir_name, model_path
+    ));
+
+    Ok(())
+}
+
+/// Handle Cohere model selection (download + config update).
+async fn handle_cohere_selection(selection: usize) -> anyhow::Result<()> {
+    let models_dir = Config::models_dir();
+
+    if selection == 0 || selection > COHERE_MODELS.len() {
+        println!("\nCancelled.");
+        return Ok(());
+    }
+
+    let model = &COHERE_MODELS[selection - 1];
+    let model_path = models_dir.join(model.dir_name);
+
+    if model_path.exists() && validate_cohere_model(&model_path).is_ok() {
+        println!("\nModel '{}' is already installed.\n", model.dir_name);
+        println!("  [1] Set as default model (update config)");
+        println!("  [2] Re-download");
+        println!("  [0] Cancel\n");
+
+        print!("Select option [1]: ");
+        io::stdout().flush()?;
+
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim();
+
+        match choice {
+            "" | "1" => {
+                update_config_cohere(model.dir_name)?;
+                restart_daemon_if_running().await;
+                return Ok(());
+            }
+            "2" => {}
+            _ => {
+                println!("Cancelled.");
+                return Ok(());
+            }
+        }
+    }
+
+    // Size-confirm before kicking off a multi-GB download.
+    println!();
+    print_warning(&format!(
+        "Cohere is a {} MB download — the largest model voxtype offers.",
+        model.size_mb,
+    ));
+    print_info("It runs entirely on-device with no cloud calls. Apache 2.0 licensed.");
+    println!();
+    print!("Continue? [Y/n]: ");
+    io::stdout().flush()?;
+
+    let mut confirm = String::new();
+    io::stdin().read_line(&mut confirm)?;
+    let confirm = confirm.trim().to_lowercase();
+    if confirm == "n" || confirm == "no" {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    download_cohere_model_by_info(model)?;
+    update_config_cohere(model.dir_name)?;
+    restart_daemon_if_running().await;
+    Ok(())
+}
+
+/// Update config to use Cohere engine with a specific model (status messages).
+fn update_config_cohere(model_name: &str) -> anyhow::Result<()> {
+    if let Some(config_path) = Config::default_path() {
+        if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path)?;
+            let updated = update_cohere_in_config(&content, model_name);
+            std::fs::write(&config_path, updated)?;
+            print_success(&format!(
+                "Config updated: engine = \"cohere\", model = \"{}\"",
+                model_name
+            ));
+            Ok(())
+        } else {
+            print_info("No config file found. Run 'voxtype setup' first.");
+            Ok(())
+        }
+    } else {
+        anyhow::bail!("Could not determine config path")
+    }
+}
+
+/// Update the config to use Cohere engine with a specific model. Mirrors
+/// `update_moonshine_in_config` exactly — the only difference is the engine
+/// name and section name. If the section doesn't exist, append a stub at EOF.
+fn update_cohere_in_config(config: &str, model_name: &str) -> String {
+    let mut result = String::new();
+    let mut has_engine_line = false;
+    let mut has_cohere_section = false;
+    let mut in_cohere_section = false;
+    let mut cohere_model_updated = false;
+
+    for line in config.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with('[') {
+            if in_cohere_section && !cohere_model_updated {
+                result.push_str(&format!("model = \"{}\"\n", model_name));
+                cohere_model_updated = true;
+            }
+            in_cohere_section = trimmed == "[cohere]";
+            if in_cohere_section {
+                has_cohere_section = true;
+            }
+        }
+
+        if trimmed.starts_with("engine") && !trimmed.starts_with('[') {
+            result.push_str("engine = \"cohere\"\n");
+            has_engine_line = true;
+        } else if in_cohere_section && trimmed.starts_with("model") {
+            result.push_str(&format!("model = \"{}\"\n", model_name));
+            cohere_model_updated = true;
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    if in_cohere_section && !cohere_model_updated {
+        result.push_str(&format!("model = \"{}\"\n", model_name));
+    }
+
+    if !has_engine_line {
+        let mut new_result = String::new();
+        let mut engine_added = false;
+        for line in result.lines() {
+            let trimmed = line.trim();
+            if !engine_added
+                && !trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !trimmed.starts_with("engine")
+            {
+                new_result.push_str("engine = \"cohere\"\n\n");
+                engine_added = true;
+            }
+            new_result.push_str(line);
+            new_result.push('\n');
+        }
+        if !engine_added {
+            new_result.push_str("engine = \"cohere\"\n");
+        }
+        result = new_result;
+    }
+
+    if !has_cohere_section {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str(&format!("\n[cohere]\nmodel = \"{}\"\n", model_name));
+    }
+
+    result
 }
 
 /// Update config to use Moonshine engine and a specific model (with status messages)

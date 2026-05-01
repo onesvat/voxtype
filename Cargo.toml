@@ -3,9 +3,9 @@ members = ["xtask"]
 
 [package]
 name = "voxtype"
-version = "0.6.3"
+version = "0.7.0-rc1"
 edition = "2021"
-authors = ["Peter Jackson", "Jean-Paul van Tillo", "Máté Rémiás", "Rob Zolkos", "Dan Heuckeroth", "Igor Warzocha", "Julian Kaiser", "Kevin Miller", "konnsim", "reisset", "Zubair", "Loki Coyote", "Umesh", "Barrett Ruth", "André Silva", "Chmouel Boudjnah", "Christopher Albert", "Phuoc Thinh Vu", "Alexander Bosu-Kellett", "ayoahha", "Toizi", "kakapt"]
+authors = ["Peter Jackson", "Jean-Paul van Tillo", "Máté Rémiás", "Rob Zolkos", "Dan Heuckeroth", "Igor Warzocha", "Julian Kaiser", "Kevin Miller", "konnsim", "reisset", "Zubair", "Loki Coyote", "Umesh", "Barrett Ruth", "André Silva", "Chmouel Boudjnah", "Christopher Albert", "Phuoc Thinh Vu", "Alexander Bosu-Kellett", "ayoahha", "Toizi", "kakapt", "Rinor Maloku", "Sami Jawhar", "jan Lemata", "Kai Stark", "graysky"]
 description = "Push-to-talk voice-to-text for Wayland"
 license = "MIT"
 readme = "README.md"
@@ -17,7 +17,7 @@ categories = ["multimedia::audio", "accessibility"]
 tokio = { version = "1", features = ["full", "signal", "sync", "time", "process", "io-util"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Configuration
 serde = { version = "1", features = ["derive"] }
@@ -69,13 +69,13 @@ tempfile = "3"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
 
 # Whisper speech-to-text
-whisper-rs = "0.15.1"
+whisper-rs = "0.16.0"
 
 # Parakeet speech-to-text (optional, ONNX-based)
-parakeet-rs = { version = "0.3", optional = true }
+parakeet-rs = { version = "0.3.5", optional = true }
 
 # ONNX-based ASR engines (Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual)
-ort = { version = "2.0.0-rc.11", optional = true }
+ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "api-24"] }
 ndarray = { version = "0.16", optional = true }
 tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
 rustfft = { version = "6", optional = true }
@@ -89,10 +89,37 @@ notify = "6"
 # Single instance check
 pidlock = "0.1"
 
+# TUI for `voxtype configure`
+ratatui = "0.29"
+crossterm = "0.28"
+toml_edit = "0.22"
+
 # Meeting mode (Pro feature)
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# OSD native frontend (SCTK + wgpu + egui-wgpu). All optional, gated by the
+# `osd-native` feature so users not opting in don't pay the build cost.
+smithay-client-toolkit = { version = "0.20", optional = true }
+calloop = { version = "0.14", optional = true }
+calloop-wayland-source = { version = "0.4", optional = true }
+wayland-client = { version = "0.31", optional = true, features = ["system"] }
+wayland-backend = { version = "0.3", optional = true, features = ["client_system"] }
+wayland-protocols = { version = "0.32", optional = true, features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", optional = true, features = ["client"] }
+wgpu = { version = "29", optional = true, default-features = false, features = ["vulkan", "gles", "wgsl", "std"] }
+egui = { version = "0.34", optional = true }
+egui-wgpu = { version = "0.34", optional = true, default-features = false }
+raw-window-handle = { version = "0.6", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", optional = true }
+
+# OSD GTK4 frontend (gated on `osd-gtk4` feature; dyn-links system GTK4).
+gtk4 = { version = "0.11", optional = true }
+gtk4-layer-shell = { version = "0.8", optional = true }
+cairo-rs = { version = "0.22", optional = true }
+glib = { version = "0.22", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tao = "0.32"
@@ -109,6 +136,25 @@ nix = { version = "0.29", features = ["signal", "process"] }  # Unix signals for
 
 [features]
 default = []
+# OSD frontends. Each binary is gated on its own feature so users can
+# build only the rendering stack they need. Real GUI deps land in
+# Commits 4a/4b; the lists below grow then.
+osd-native = [
+    "dep:smithay-client-toolkit",
+    "dep:calloop",
+    "dep:calloop-wayland-source",
+    "dep:wayland-client",
+    "dep:wayland-backend",
+    "dep:wayland-protocols",
+    "dep:wayland-protocols-wlr",
+    "dep:wgpu",
+    "dep:egui",
+    "dep:egui-wgpu",
+    "dep:raw-window-handle",
+    "dep:pollster",
+    "dep:bytemuck",
+]
+osd-gtk4 = ["dep:gtk4", "dep:gtk4-layer-shell", "dep:cairo-rs", "dep:glib"]
 gpu-vulkan = ["whisper-rs/vulkan"]
 gpu-cuda = ["whisper-rs/cuda"]
 gpu-metal = ["whisper-rs/metal"]
@@ -119,7 +165,7 @@ ml-diarization = ["dep:ort", "dep:ndarray"]
 parakeet = ["dep:parakeet-rs"]
 parakeet-cuda = ["parakeet", "parakeet-rs/cuda"]
 parakeet-tensorrt = ["parakeet", "parakeet-rs/tensorrt"]
-parakeet-rocm = ["parakeet", "parakeet-rs/rocm"]
+parakeet-migraphx = ["parakeet", "parakeet-rs/migraphx"]
 parakeet-coreml = ["parakeet", "parakeet-rs/coreml"]
 # Dynamic loading for system ONNX Runtime (used by Nix builds)
 parakeet-load-dynamic = ["parakeet", "parakeet-rs/load-dynamic"]
@@ -145,6 +191,18 @@ dolphin-tensorrt = ["dolphin", "ort/tensorrt"]
 omnilingual = ["onnx-common"]
 omnilingual-cuda = ["omnilingual", "ort/cuda"]
 omnilingual-tensorrt = ["omnilingual", "ort/tensorrt"]
+# Cohere Transcribe backend (ONNX-based encoder-decoder, Whisper-style task tokens).
+# Top of the Open ASR Leaderboard. Wired into CLI/config/factory; users opt in
+# via `cargo build --features cohere` and the model files are downloaded into
+# the standard models directory like other ONNX engines.
+cohere = ["onnx-common"]
+cohere-cuda = ["cohere", "ort/cuda"]
+cohere-tensorrt = ["cohere", "ort/tensorrt"]
+cohere-migraphx = ["cohere", "ort/migraphx"]
+# Dynamic loading for system ONNX Runtime. Used by Nix builds and the
+# AMD/MIGraphX binary, which pairs with the system `onnxruntime-rocm`
+# package (no upstream pyke prebuilt ships the MIGraphX provider .so).
+onnx-load-dynamic = ["ort/load-dynamic"]
 
 [build-dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -165,3 +223,21 @@ opt-level = 1  # Faster dev builds, whisper still usable
 [[bin]]
 name = "voxtype"
 path = "src/main.rs"
+
+[[bin]]
+name = "voxtype-osd-native"
+path = "src/bin/voxtype_osd_native/main.rs"
+required-features = ["osd-native"]
+
+[[bin]]
+name = "voxtype-osd-gtk4"
+path = "src/bin/voxtype_osd_gtk4.rs"
+required-features = ["osd-gtk4"]
+
+# Tiny launcher that picks between voxtype-osd-gtk4 and voxtype-osd-native
+# at runtime based on config/env/CLI. Always built, no GUI deps; falls back
+# to whichever frontend binary it finds on PATH if the preferred one isn't
+# installed.
+[[bin]]
+name = "voxtype-osd"
+path = "src/bin/voxtype_osd.rs"

@@ -2,6 +2,14 @@
 
 Complete reference for all configuration options in Voxtype.
 
+> **Tip**: For interactive editing, run `voxtype configure` — it edits the
+> same `config.toml` this document describes, preserves comments and unknown
+> fields, and validates each save before swapping the file in. The reference
+> below stays useful for scripted setups, advanced fields the TUI doesn't
+> surface yet, and understanding each section end-to-end. See the
+> [TUI section in the user manual](USER_MANUAL.md#voxtype-configure) for
+> keybindings.
+
 ## Configuration File Location
 
 Voxtype looks for configuration in the following locations (in order):
@@ -25,8 +33,13 @@ Selects which speech-to-text engine to use for transcription.
 
 **Values:**
 - `whisper` - OpenAI Whisper via whisper.cpp (default, recommended)
-- `parakeet` - NVIDIA Parakeet via ONNX Runtime (experimental, requires special binary)
+- `parakeet` - NVIDIA Parakeet via ONNX Runtime (requires ONNX binary)
 - `moonshine` - Moonshine encoder-decoder transformer via ONNX Runtime (experimental, requires special binary)
+- `sensevoice` - Alibaba SenseVoice CTC via ONNX Runtime (CJK + English)
+- `paraformer` - FunASR Paraformer CTC via ONNX Runtime (Chinese + English)
+- `dolphin` - Dictation-optimized CTC via ONNX Runtime (Chinese + English)
+- `omnilingual` - FunASR Omnilingual CTC via ONNX Runtime (50+ languages)
+- `cohere` - Cohere Transcribe encoder-decoder via ONNX Runtime (#1 Open ASR Leaderboard, 14 languages, ~3 GB model)
 
 **Example:**
 ```toml
@@ -39,11 +52,11 @@ voxtype --engine parakeet daemon
 ```
 
 **Notes:**
-- Parakeet requires an ONNX-enabled binary (`voxtype-*-onnx-*`)
-- When using Parakeet, you must also configure the `[parakeet]` section
-- When using Moonshine, you must also configure the `[moonshine]` section
+- All engines except Whisper require an ONNX-enabled binary (`voxtype-*-onnx-*`)
+- Each ONNX engine reads its own `[<engine>]` section (e.g. `[parakeet]`, `[cohere]`)
 - See [PARAKEET.md](PARAKEET.md) for detailed Parakeet setup instructions
 - See [MOONSHINE.md](MOONSHINE.md) for detailed Moonshine setup instructions
+- Cohere Transcribe is the largest model voxtype ships (~3 GB int8); use `voxtype setup model` to download it
 
 ---
 
@@ -186,6 +199,10 @@ bindsym $mod+v exec voxtype record start
 bindsym --release $mod+v exec voxtype record stop
 ```
 
+**KDE Plasma (KWin):**
+
+KDE does not support key-release events, so use toggle mode. Open **System Settings > Shortcuts > Custom Shortcuts**, create a new global shortcut, and set the command to `voxtype record toggle`. Assign your preferred key combination (e.g., Meta+V).
+
 **Note:** For `toggle` mode to work correctly, you must also set `state_file = "auto"` so voxtype can track its current state.
 
 See [User Manual - Compositor Keybindings](USER_MANUAL.md#compositor-keybindings) for complete setup instructions.
@@ -240,6 +257,39 @@ cancel_key = "ESC"  # Press Escape to cancel
 - `F12` - Function key
 
 **Note:** This only applies when using evdev hotkey detection (`enabled = true`). When using compositor keybindings, use `voxtype record cancel` instead. See [User Manual - Canceling Transcription](USER_MANUAL.md#canceling-transcription).
+
+### [hotkey.profile_modifiers]
+
+**Type:** Table (key = modifier name, value = profile name)
+**Default:** Empty (disabled)
+**Required:** No
+
+Maps modifier keys to named profiles. When a profile modifier is held while pressing the hotkey, that profile's post-processing command is used instead of the default. Profiles are defined in `[profiles.<name>]` sections.
+
+**Example:**
+```toml
+[hotkey]
+key = "SCROLLLOCK"
+
+[hotkey.profile_modifiers]
+RIGHTSHIFT = "translate"   # Shift + hotkey activates [profiles.translate]
+RIGHTALT = "formal"        # RightAlt + hotkey activates [profiles.formal]
+
+[profiles.translate]
+post_process_command = "my-script.sh --translate-en"
+post_process_timeout_ms = 10000
+
+[profiles.formal]
+post_process_command = "my-script.sh --formal"
+```
+
+**Valid key names:** Same modifier keys as `modifiers` option:
+- `LEFTSHIFT`, `RIGHTSHIFT`
+- `LEFTCTRL`, `RIGHTCTRL`
+- `LEFTALT`, `RIGHTALT`
+- `LEFTMETA`, `RIGHTMETA`
+
+**Note:** This only applies when using evdev hotkey detection (`enabled = true`). When using compositor keybindings, use `voxtype record start --profile <name>` instead. Avoid using the same key in both `modifiers` and `profile_modifiers` -- every hotkey press would always activate that profile.
 
 ---
 
@@ -567,6 +617,26 @@ gpu_isolation = true  # Release GPU memory between transcriptions
 ```
 
 **Note:** This setting only applies when using the local whisper backend (`backend = "local"`). It has no effect with remote transcription since no local GPU is used.
+
+### gpu_device
+
+**Type:** Integer
+**Default:** Not set (uses device index 0)
+**Required:** No
+
+GPU device index for Vulkan/CUDA/Metal backend selection. On multi-GPU systems, whisper.cpp may select the wrong GPU by default (e.g., an integrated GPU instead of a discrete GPU), causing slower transcription.
+
+This sets the device index passed directly to whisper.cpp. For systems where the integrated and discrete GPUs are from **different vendors** (e.g., Intel iGPU + NVIDIA dGPU), the `VOXTYPE_VULKAN_DEVICE` environment variable is usually simpler -- it filters by vendor at the Vulkan driver level. See the [Environment Variables](#environment-variables) section.
+
+Use `gpu_device` when you need precise index-level control, such as when both GPUs are from the same vendor.
+
+**Example:**
+```toml
+[whisper]
+gpu_device = 1  # Use discrete GPU (skip integrated GPU at index 0)
+```
+
+**How to find your GPU index:** Run `voxtype setup gpu` to see detected GPUs, or `vulkaninfo --summary` for Vulkan device indices.
 
 ### context_window_optimization
 
@@ -975,7 +1045,7 @@ sudo cp build/bin/whisper-cli /usr/local/bin/
 
 Configuration for the Parakeet speech-to-text engine. This section is only used when `engine = "parakeet"`.
 
-> **Note:** Parakeet support is experimental. See [PARAKEET.md](PARAKEET.md) for detailed setup instructions.
+See [PARAKEET.md](PARAKEET.md) for detailed setup instructions.
 
 ### model
 
@@ -1130,6 +1200,114 @@ model = "base"
 quantized = true
 on_demand_loading = false  # Keep model loaded for fast response
 ```
+
+---
+
+## [cohere]
+
+Configuration for the Cohere Transcribe speech-to-text engine. This section is only used when `engine = "cohere"`.
+
+Cohere Transcribe is an encoder-decoder ASR model from Cohere Labs. It currently sits at #1 on the Open ASR Leaderboard. Whisper-style task tokens give it punctuation, capitalization, and inverse text normalization out of the box.
+
+### model
+
+**Type:** String
+**Default:** `"cohere-transcribe-int8"`
+**Required:** No
+
+The Cohere model to use. Can be a model name (looked up in `~/.local/share/voxtype/models/<name>/`) or an absolute path to a model directory.
+
+**Available models:**
+
+| Model | Quantization | Size | Notes |
+|-------|--------------|------|-------|
+| `cohere-transcribe-int8` | int8 | ~3.1 GB | Default; runs on CPU or GPU |
+
+Download via `voxtype setup model` (interactive) — pick the Cohere section and confirm the size warning.
+
+**Example:**
+```toml
+[cohere]
+model = "cohere-transcribe-int8"
+```
+
+### language
+
+**Type:** String
+**Default:** `"en"`
+**Required:** No
+
+Two-letter ISO 639-1 language code. Cohere officially supports 14 languages.
+
+**Supported values:** `ar`, `de`, `en`, `es`, `fr`, `hi`, `it`, `ja`, `ko`, `nl`, `pt`, `ru`, `tr`, `zh`.
+
+**Example:**
+```toml
+[cohere]
+language = "fr"
+```
+
+The daemon resolves the language to its decoder prefix at startup. Unsupported codes are rejected with a clear error.
+
+### threads
+
+**Type:** Integer (optional)
+**Default:** unset (uses `min(num_cpus, 4)`)
+**Required:** No
+
+Number of CPU threads for ONNX Runtime intra-op parallelism. Leave unset on most machines.
+
+**Example:**
+```toml
+[cohere]
+threads = 8
+```
+
+### on_demand_loading
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+Same behavior as `[whisper].on_demand_loading`. When `true`, loads the model only when recording starts and unloads after transcription. Useful when working on a laptop where 3 GB of RAM dedicated to the daemon is too costly.
+
+**Example:**
+```toml
+[cohere]
+on_demand_loading = true
+```
+
+### Configuration Summary
+
+| Option | CLI Flag | Environment Variable | Default | Description |
+|--------|----------|---------------------|---------|-------------|
+| `model` | `--model` | `VOXTYPE_MODEL` | `"cohere-transcribe-int8"` | Cohere model name or path |
+| `language` | `--language` | `VOXTYPE_LANGUAGE` | `"en"` | One of the 14 supported language codes |
+| `threads` | - | - | auto | ONNX intra-op thread count |
+| `on_demand_loading` | - | - | `false` | Load model only when recording starts |
+
+### Complete Example
+
+```toml
+engine = "cohere"
+
+[cohere]
+model = "cohere-transcribe-int8"
+language = "en"
+on_demand_loading = false
+```
+
+### Building from Source
+
+Source builds need the `cohere` Cargo feature. Optional GPU acceleration via `cohere-cuda` or `cohere-tensorrt`:
+
+```bash
+cargo build --release --features cohere           # CPU
+cargo build --release --features cohere-cuda      # NVIDIA GPU
+cargo build --release --features cohere-tensorrt  # NVIDIA + TensorRT EP
+```
+
+The prebuilt `voxtype-*-onnx-*` release binaries already include `cohere`, so users installing via AUR/.deb/.rpm don't need to rebuild.
 
 ---
 
@@ -1521,6 +1699,35 @@ shift_enter_newlines = true  # Use Shift+Enter for newlines
 
 **Note:** This only affects the wtype output driver. When combined with `auto_submit = true`, the final Enter (to submit) is still sent as a regular Enter after all Shift+Enter line breaks.
 
+### wtype_shift_prefix
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+**Environment Variable:** `VOXTYPE_WTYPE_SHIFT_PREFIX`
+
+Prefix wtype output with a Shift key press and release. This is a workaround for apps (notably Discord) that drop the first CJK character when wtype types text. The Shift press/release has no visible effect on the output but prevents the first character from being swallowed.
+
+Only affects the wtype output driver. Has no effect when using dotool, ydotool, or clipboard modes.
+
+**Example:**
+```toml
+[output]
+wtype_shift_prefix = true
+```
+
+**CLI override:**
+```bash
+voxtype --wtype-shift-prefix daemon
+```
+
+**When to use:**
+- First CJK (Chinese, Japanese, Korean) character is missing from output
+- You're using the wtype driver (default on wlroots compositors)
+- The problem happens in specific apps like Discord
+
+See [Troubleshooting](TROUBLESHOOTING.md#first-cjk-character-dropped-wtype) for more details.
+
 ### pre_output_command
 
 **Type:** String
@@ -1645,6 +1852,16 @@ the original text is used and a warning is logged.
 command = "ollama run llama3.2:1b 'Clean up:'"
 timeout_ms = 45000  # 45 second timeout for LLM
 ```
+
+### Context from Previous Dictation
+
+When post-processing is enabled, voxtype passes the previous dictation's text via the `VOXTYPE_CONTEXT` environment variable (if the previous dictation was within 60 seconds). This helps LLM-based cleanup scripts maintain continuity across rapid-fire dictations.
+
+- Stdin always contains only the current text (existing scripts work unchanged)
+- Scripts that want context can optionally read `$VOXTYPE_CONTEXT`
+- In meeting mode, context is tracked per audio source (mic/loopback) to prevent speaker bleed
+
+See the example scripts in `examples/` for how to use `VOXTYPE_CONTEXT`.
 
 ### Error Handling
 
@@ -1860,6 +2077,96 @@ If Whisper transcribes "vox type" (or "Vox Type"), it will be replaced with "vox
 "omar key" = "Omarchy"
 ```
 
+### smart_auto_submit
+
+**Type:** Boolean
+**Default:** `false`
+**Required:** No
+
+When `true`, Voxtype watches for the word "submit" at the end of each transcription. If detected, it strips the word from the output and presses Enter - as if `auto_submit` had fired, but triggered by voice rather than being permanently on. Trailing punctuation on "submit" (e.g., "submit." from spoken punctuation) is handled correctly.
+
+**Example:**
+
+```toml
+[text]
+smart_auto_submit = true
+```
+
+Saying "send a reply to Alice submit" types "send a reply to Alice" and presses Enter.
+
+**Per-recording override:**
+
+```bash
+# Enable for just this recording (even if config has it off)
+voxtype record start --smart-auto-submit
+voxtype record toggle --smart-auto-submit
+
+# Disable for just this recording (even if config has it on)
+voxtype record start --no-smart-auto-submit
+```
+
+**Environment variable:**
+
+```bash
+VOXTYPE_SMART_AUTO_SUBMIT=true voxtype
+```
+
+**Note:** `smart_auto_submit` is conditional - it only fires when you say "submit". The existing `auto_submit` option always presses Enter after every transcription. Use `smart_auto_submit` when you want the choice per dictation, and `auto_submit` when you always want Enter pressed.
+
+### filter_filler_words
+
+**Type:** Boolean
+**Default:** `true`
+**Required:** No
+
+When `true` (the default), strips common filler words ("uh", "um", "er", ...) from each transcription before output. Matching is case-insensitive and respects word boundaries, so words like "umbrella" or "summer" are not affected. Surrounding commas, semicolons, and double spaces are cleaned up so the result reads naturally. Set to `false` to disable.
+
+**Example:**
+
+```toml
+[text]
+filter_filler_words = true
+```
+
+With this enabled:
+
+- "Well, um, I think" becomes "Well, I think"
+- "uh hello world" becomes "hello world"
+- "hello world, uh." becomes "hello world."
+
+**CLI flag:**
+
+```bash
+voxtype --filter-fillers       # force on (overrides config)
+voxtype --no-filter-fillers    # force off (overrides config)
+```
+
+**Environment variable:**
+
+```bash
+VOXTYPE_FILTER_FILLERS=true voxtype
+```
+
+The filter runs before `replacements` and the `[post_process]` LLM hook, so any custom replacements still apply on top of filtered text.
+
+### filler_words
+
+**Type:** Array of strings
+**Default:** `["uh", "um", "er", "ah", "eh", "hmm", "hm", "mm", "mhm"]`
+**Required:** No
+
+Words removed by the filler-word filter. The default list is conservative and includes only single-syllable disfluencies. Override it to add your own (for example "like" or "you know"), or to disable specific entries by replacing the list.
+
+**Example:**
+
+```toml
+[text]
+filter_filler_words = true
+filler_words = ["uh", "um", "er", "like", "you know"]
+```
+
+Multi-word entries like "you know" are matched as a single phrase. Adding aggressive entries (such as "like") may strip legitimate uses of the word; keep the list conservative or disable the filter for technical writing.
+
 ---
 
 ## [vad]
@@ -2068,8 +2375,8 @@ Enable speaker diarization to identify different speakers in meeting transcripts
 
 Diarization backend to use:
 
-- `"simple"` - Energy-based speaker change detection. No model download required.
-- `"ml"` - Machine learning speaker embeddings (requires ONNX feature).
+- `"simple"` - Uses audio source (mic vs loopback) to attribute speech as "You" or "Remote". No model download required.
+- `"ml"` - ONNX-based speaker embeddings (ECAPA-TDNN) to identify individual remote speakers. The model is downloaded automatically on first use. **Experimental:** speaker clustering works best with longer speech segments; short segments may produce too many unique speaker IDs.
 - `"remote"` - Remote diarization API.
 
 ### max_speakers
@@ -2360,6 +2667,7 @@ Any config file setting can be overridden via environment variable. These are ap
 | `VOXTYPE_TRANSLATE` | bool | `whisper.translate` |
 | `VOXTYPE_THREADS` | integer | `whisper.threads` |
 | `VOXTYPE_GPU_ISOLATION` | bool | `whisper.gpu_isolation` |
+| `VOXTYPE_GPU_DEVICE` | integer | `whisper.gpu_device` |
 | `VOXTYPE_ON_DEMAND_LOADING` | bool | `whisper.on_demand_loading` |
 | `VOXTYPE_REMOTE_ENDPOINT` | string | `whisper.remote_endpoint` |
 | `VOXTYPE_WHISPER_API_KEY` | string | `whisper.remote_api_key` |
@@ -2386,6 +2694,8 @@ Any config file setting can be overridden via environment variable. These are ap
 | `VOXTYPE_PASTE_KEYS` | string | `output.paste_keys` |
 | `VOXTYPE_DOTOOL_XKB_LAYOUT` | string | `output.dotool_xkb_layout` |
 | `VOXTYPE_SPOKEN_PUNCTUATION` | bool | `text.spoken_punctuation` |
+| `VOXTYPE_SMART_AUTO_SUBMIT` | bool | `text.smart_auto_submit` |
+| `VOXTYPE_FILTER_FILLERS` | bool | `text.filter_filler_words` |
 
 Boolean values: `true`, `1` to enable; `false`, `0` to disable.
 

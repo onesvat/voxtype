@@ -24,6 +24,7 @@ pub mod worker;
     feature = "paraformer",
     feature = "dolphin",
     feature = "omnilingual",
+    feature = "cohere",
 ))]
 pub mod fbank;
 
@@ -33,6 +34,7 @@ pub mod fbank;
     feature = "paraformer",
     feature = "dolphin",
     feature = "omnilingual",
+    feature = "cohere",
 ))]
 pub mod ctc;
 
@@ -54,15 +56,46 @@ pub mod dolphin;
 #[cfg(feature = "omnilingual")]
 pub mod omnilingual;
 
+/// Cohere Transcribe backend (proof-of-concept, not wired into factory/CLI/config).
+/// See `src/transcribe/cohere.rs` for usage.
+#[cfg(feature = "cohere")]
+pub mod cohere;
+
 use crate::config::{Config, TranscriptionEngine, WhisperConfig, WhisperMode};
 use crate::error::TranscribeError;
 use crate::setup::gpu;
+
+/// A timed segment from transcription (word or sentence level)
+#[derive(Debug, Clone)]
+pub struct TimedSegment {
+    pub text: String,
+    /// Start time in seconds relative to the audio input
+    pub start_secs: f32,
+    /// End time in seconds relative to the audio input
+    pub end_secs: f32,
+}
 
 /// Trait for speech-to-text implementations
 pub trait Transcriber: Send + Sync {
     /// Transcribe audio samples to text
     /// Input: f32 samples, mono, 16kHz
     fn transcribe(&self, samples: &[f32]) -> Result<String, TranscribeError>;
+
+    /// Transcribe with word-level timestamps.
+    /// Default implementation falls back to transcribe() with a single segment.
+    fn transcribe_timed(&self, samples: &[f32]) -> Result<Vec<TimedSegment>, TranscribeError> {
+        let text = self.transcribe(samples)?;
+        let duration = samples.len() as f32 / 16000.0;
+        if text.is_empty() {
+            Ok(vec![])
+        } else {
+            Ok(vec![TimedSegment {
+                text,
+                start_secs: 0.0,
+                end_secs: duration,
+            }])
+        }
+    }
 
     /// Prepare for transcription (optional, called when recording starts)
     ///
@@ -173,6 +206,20 @@ pub fn create_transcriber(config: &Config) -> Result<Box<dyn Transcriber>, Trans
         #[cfg(not(feature = "omnilingual"))]
         TranscriptionEngine::Omnilingual => Err(TranscribeError::InitFailed(
             "Omnilingual engine requested but voxtype was not compiled with --features omnilingual"
+                .to_string(),
+        )),
+        #[cfg(feature = "cohere")]
+        TranscriptionEngine::Cohere => {
+            let cfg = config.cohere.as_ref().ok_or_else(|| {
+                TranscribeError::InitFailed(
+                    "Cohere engine selected but [cohere] config section is missing".to_string(),
+                )
+            })?;
+            Ok(Box::new(cohere::CohereTranscriber::new(cfg)?))
+        }
+        #[cfg(not(feature = "cohere"))]
+        TranscriptionEngine::Cohere => Err(TranscribeError::InitFailed(
+            "Cohere engine requested but voxtype was not compiled with --features cohere"
                 .to_string(),
         )),
     }

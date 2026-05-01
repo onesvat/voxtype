@@ -10,7 +10,7 @@ use tracing_subscriber::EnvFilter;
 #[cfg(target_os = "macos")]
 use voxtype::menubar;
 use voxtype::{
-    config, cpu, daemon, meeting, setup, transcribe, vad, Cli, Commands, MeetingAction,
+    config, cpu, daemon, meeting, setup, transcribe, vad, Cli, Commands, InfoAction, MeetingAction,
     RecordAction, SetupAction,
 };
 
@@ -133,9 +133,10 @@ async fn main() -> anyhow::Result<()> {
             "paraformer" => config.engine = config::TranscriptionEngine::Paraformer,
             "dolphin" => config.engine = config::TranscriptionEngine::Dolphin,
             "omnilingual" => config.engine = config::TranscriptionEngine::Omnilingual,
+            "cohere" => config.engine = config::TranscriptionEngine::Cohere,
             _ => {
                 eprintln!(
-                    "Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual",
+                    "Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, cohere",
                     engine
                 );
                 std::process::exit(1);
@@ -186,6 +187,12 @@ async fn main() -> anyhow::Result<()> {
     if cli.gpu_isolation {
         config.whisper.gpu_isolation = true;
     }
+    if let Some(gpu_device) = cli.gpu_device {
+        config.whisper.gpu_device = Some(gpu_device);
+    }
+    if cli.flash_attention {
+        config.whisper.flash_attention = true;
+    }
     if cli.on_demand_loading {
         config.whisper.on_demand_loading = true;
     }
@@ -232,10 +239,16 @@ async fn main() -> anyhow::Result<()> {
     if cli.no_audio_feedback {
         config.audio.feedback.enabled = false;
     }
+    if cli.pause_media {
+        config.audio.pause_media = true;
+    }
 
     // Output overrides
     if let Some(append_text) = cli.append_text {
         config.output.append_text = Some(append_text);
+    }
+    if cli.wtype_shift_prefix {
+        config.output.wtype_shift_prefix = true;
     }
     if let Some(ref driver_str) = cli.driver {
         match parse_driver_order(driver_str) {
@@ -260,6 +273,12 @@ async fn main() -> anyhow::Result<()> {
     if cli.no_shift_enter_newlines {
         config.output.shift_enter_newlines = false;
     }
+    if cli.smart_auto_submit {
+        config.text.smart_auto_submit = true;
+    }
+    if cli.no_smart_auto_submit {
+        config.text.smart_auto_submit = false;
+    }
     if let Some(delay) = cli.type_delay {
         config.output.type_delay_ms = delay;
     }
@@ -271,6 +290,12 @@ async fn main() -> anyhow::Result<()> {
     }
     if cli.spoken_punctuation {
         config.text.spoken_punctuation = true;
+    }
+    if cli.filter_fillers {
+        config.text.filter_filler_words = true;
+    }
+    if cli.no_filter_fillers {
+        config.text.filter_filler_words = false;
     }
     if let Some(keys) = cli.paste_keys {
         config.output.paste_keys = Some(keys);
@@ -411,8 +436,9 @@ async fn main() -> anyhow::Result<()> {
                     "paraformer" => config.engine = config::TranscriptionEngine::Paraformer,
                     "dolphin" => config.engine = config::TranscriptionEngine::Dolphin,
                     "omnilingual" => config.engine = config::TranscriptionEngine::Omnilingual,
+                    "cohere" => config.engine = config::TranscriptionEngine::Cohere,
                     _ => {
-                        eprintln!("Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual", engine_name);
+                        eprintln!("Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, cohere", engine_name);
                         std::process::exit(1);
                     }
                 }
@@ -562,6 +588,20 @@ async fn main() -> anyhow::Result<()> {
                         setup::gpu::show_status();
                     }
                 }
+                Some(SetupAction::Variant { to }) => {
+                    let variant = setup::binary::Variant::from_binary_name(&to)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "Unknown variant '{}'. Expected one of: {}",
+                            to,
+                            setup::binary::Variant::ALL
+                                .iter()
+                                .map(|v| v.binary_name())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))?;
+                    setup::binary::switch_to(variant)?;
+                    println!("Switched /usr/bin/voxtype to {}.", variant.binary_name());
+                }
                 Some(SetupAction::Onnx {
                     enable,
                     disable,
@@ -607,6 +647,14 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Config => {
             show_config(&config).await?;
+        }
+
+        Commands::Info { action } => {
+            run_info_command(action)?;
+        }
+
+        Commands::Configure { force_package_mode } => {
+            voxtype::tui::run(force_package_mode)?;
         }
 
         Commands::Status {
@@ -917,6 +965,13 @@ fn send_record_command(
             .map_err(|e| anyhow::anyhow!("Failed to write model override: {}", e))?;
     }
 
+    // Write smart auto-submit override file if specified
+    if let Some(enabled) = action.smart_auto_submit_override() {
+        let override_file = config::Config::runtime_dir().join("smart_auto_submit_override");
+        std::fs::write(&override_file, if enabled { "true" } else { "false" })
+            .map_err(|e| anyhow::anyhow!("Failed to write smart auto-submit override: {}", e))?;
+    }
+
     // Write profile override file if specified
     if let Some(profile_name) = action.profile() {
         // Validate that the profile exists in config
@@ -1126,19 +1181,24 @@ struct ExtendedStatusInfo {
 
 impl ExtendedStatusInfo {
     fn from_config(config: &config::Config) -> Self {
-        let backend = setup::gpu::detect_current_backend()
-            .map(|b| match b {
+        // Try Whisper backend detection first, then fall back to ONNX backend detection
+        let backend = if let Some(b) = setup::gpu::detect_current_backend() {
+            match b {
                 setup::gpu::Backend::Cpu => "CPU (legacy)",
                 setup::gpu::Backend::Native => "CPU (native)",
                 setup::gpu::Backend::Avx2 => "CPU (AVX2)",
                 setup::gpu::Backend::Avx512 => "CPU (AVX-512)",
                 setup::gpu::Backend::Vulkan => "GPU (Vulkan)",
-            })
-            .unwrap_or("unknown")
-            .to_string();
+            }
+            .to_string()
+        } else if let Some(pb) = setup::parakeet::detect_current_parakeet_backend() {
+            pb.display_name().to_string()
+        } else {
+            "unknown".to_string()
+        };
 
         Self {
-            model: config.whisper.model.clone(),
+            model: config.model_name().to_string(),
             device: config.audio.device.clone(),
             backend,
         }
@@ -1346,6 +1406,100 @@ fn format_state_json(
     }
 }
 
+/// Dispatch `voxtype info <subcommand>`.
+fn run_info_command(action: InfoAction) -> anyhow::Result<()> {
+    match action {
+        InfoAction::Variants { json } => {
+            let inv = setup::binary::inventory();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&inv)?);
+            } else {
+                print_variants_text(&inv);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_variants_text(inv: &setup::binary::Inventory) {
+    use setup::binary::InstallKind;
+
+    println!("Voxtype install");
+    println!("  Binary:        {}", inv.binary_path.display());
+    println!(
+        "  Install kind:  {}",
+        match inv.install_kind {
+            InstallKind::Package => "package",
+            InstallKind::Source => "source",
+        }
+    );
+    if let Some(dir) = &inv.package_lib_dir {
+        println!("  Lib dir:       {}", dir.display());
+    }
+    if !inv.compiled_features.is_empty() {
+        println!("  Features:      {}", inv.compiled_features.join(", "));
+    }
+
+    println!();
+    println!("Hardware");
+    println!(
+        "  CPU:           AVX2={}, AVX-512={}",
+        inv.cpu.avx2, inv.cpu.avx512
+    );
+    println!(
+        "  GPU:           NVIDIA={}, AMD={}",
+        inv.gpus.nvidia, inv.gpus.amd
+    );
+
+    println!();
+    println!("Recommended for this hardware");
+    println!(
+        "  Whisper:       ★ {}  — {}",
+        inv.recommendation.whisper.display(),
+        inv.recommendation.whisper_reason
+    );
+    println!(
+        "  ONNX:          ★ {}  — {}",
+        inv.recommendation.onnx.display(),
+        inv.recommendation.onnx_reason
+    );
+
+    println!();
+    if matches!(inv.install_kind, InstallKind::Source) {
+        println!("Source build: variant switching not applicable.");
+        println!("To enable a different engine, rebuild with the appropriate Cargo features.");
+        return;
+    }
+
+    println!("Variants");
+    if let Some(active) = inv.active_variant {
+        println!(
+            "  Active:        {} ({})",
+            active.display(),
+            active.binary_name()
+        );
+    } else {
+        println!("  Active:        unknown (symlink missing or unrecognized)");
+    }
+
+    println!();
+    println!("  Available:");
+    for status in &inv.variants {
+        let mark = if status.active {
+            "● active"
+        } else if !status.installed {
+            "  not installed"
+        } else if !status.runs_on_this_cpu {
+            "  installed (won't run on this CPU)"
+        } else if !status.gpu_available {
+            "  installed (no compatible GPU detected)"
+        } else {
+            "  installed"
+        };
+        println!("    {:<22} {}", status.variant.display(), mark);
+    }
+}
+
 /// Show current configuration
 async fn show_config(config: &config::Config) -> anyhow::Result<()> {
     println!("Current Configuration\n");
@@ -1377,9 +1531,12 @@ async fn show_config(config: &config::Config) -> anyhow::Result<()> {
     if let Some(threads) = config.whisper.threads {
         println!("  threads = {}", threads);
     }
+    if let Some(gpu_device) = config.whisper.gpu_device {
+        println!("  gpu_device = {}", gpu_device);
+    }
 
-    // Show Parakeet status (experimental)
-    println!("\n[parakeet] (EXPERIMENTAL)");
+    // Show Parakeet status
+    println!("\n[parakeet]");
     if let Some(ref parakeet_config) = config.parakeet {
         println!("  model = {:?}", parakeet_config.model);
         if let Some(ref model_type) = parakeet_config.model_type {
@@ -1588,7 +1745,7 @@ fn reset_sigpipe() {
 
 /// Run a meeting command
 async fn run_meeting_command(config: &config::Config, action: MeetingAction) -> anyhow::Result<()> {
-    use meeting::{ExportFormat, ExportOptions, MeetingConfig, StorageConfig};
+    use meeting::{export_meeting, ExportFormat, ExportOptions, MeetingConfig, StorageConfig};
 
     // Convert config to meeting config
     let storage_path = if config.meeting.storage_path == "auto" {
@@ -1607,6 +1764,7 @@ async fn run_meeting_command(config: &config::Config, action: MeetingAction) -> 
         },
         retain_audio: config.meeting.retain_audio,
         max_duration_mins: config.meeting.max_duration_mins,
+        diarization: None,
     };
 
     match action {
@@ -1801,24 +1959,40 @@ async fn run_meeting_command(config: &config::Config, action: MeetingAction) -> 
                 line_width: 0,
             };
 
-            match meeting::export_meeting_by_id(
-                &meeting_config,
-                &meeting_id,
-                export_format,
-                &options,
-            ) {
-                Ok(content) => {
-                    if let Some(path) = output {
-                        std::fs::write(&path, &content)?;
-                        println!("Exported to {:?}", path);
-                    } else {
-                        println!("{}", content);
-                    }
+            let meeting_data = match meeting::get_meeting(&meeting_config, &meeting_id) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Error loading meeting: {}", e);
+                    std::process::exit(1);
                 }
+            };
+
+            let content = match export_meeting(&meeting_data, export_format, &options) {
+                Ok(c) => c,
                 Err(e) => {
                     eprintln!("Error exporting meeting: {}", e);
                     std::process::exit(1);
                 }
+            };
+
+            if let Some(path) = output {
+                let file_path = if path.is_dir() {
+                    let title = meeting_data.metadata.display_title();
+                    let safe_title =
+                        title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-");
+                    let basename = if safe_title.trim().is_empty() {
+                        format!("meeting-{}", meeting_data.metadata.id)
+                    } else {
+                        safe_title
+                    };
+                    path.join(format!("{}.{}", basename, export_format.extension()))
+                } else {
+                    path
+                };
+                std::fs::write(&file_path, &content)?;
+                println!("Exported to {}", file_path.display());
+            } else {
+                println!("{}", content);
             }
         }
 

@@ -60,6 +60,10 @@ sample_rate = 16000
 # Maximum recording duration in seconds (safety limit)
 max_duration_secs = 60
 
+# Pause MPRIS media players (Spotify, Firefox, etc.) when recording starts,
+# resume them when recording stops. Requires playerctl.
+# pause_media = false
+
 # [audio.feedback]
 # Enable audio feedback sounds (beeps when recording starts/stops)
 # enabled = true
@@ -98,6 +102,17 @@ translate = false
 
 # Number of CPU threads for inference (omit for auto-detection)
 # threads = 4
+
+# GPU device index for Vulkan/CUDA backend selection.
+# On multi-GPU systems, whisper.cpp may default to the integrated GPU (index 0),
+# causing slower transcription. For different-vendor setups (e.g., Intel iGPU +
+# NVIDIA dGPU), use VOXTYPE_VULKAN_DEVICE=nvidia instead (simpler).
+# Use gpu_device for same-vendor GPUs or precise index control.
+# gpu_device = 1
+
+# Enable flash attention for GPU inference (default: false)
+# Reduces memory usage (~75%) and improves speed (~10%) on CUDA/Vulkan.
+# flash_attention = false
 
 # Initial prompt to provide context for transcription
 # Use this to hint at terminology, proper nouns, or formatting conventions.
@@ -181,6 +196,10 @@ type_delay_ms = 0
 # Useful for applications where Enter submits (e.g., Cursor IDE, Slack, Discord)
 # shift_enter_newlines = false
 
+# Prefix wtype output with a Shift key press/release
+# Workaround for apps (e.g., Discord) that drop the first CJK character
+# wtype_shift_prefix = false
+
 # Restore clipboard content after paste mode (default: false)
 # Saves clipboard before transcription, restores it after paste keystroke
 # Only applies to mode = "paste". Useful when you want to preserve your
@@ -207,6 +226,8 @@ type_delay_ms = 0
 # [output.post_process]
 # command = "ollama run llama3.2:1b 'Clean up this dictation. Fix grammar, remove filler words. Output only the cleaned text:'"
 # timeout_ms = 30000  # 30 second timeout (generous for LLM)
+# trim = true         # Strip leading/trailing whitespace from output (default: true)
+# fallback_on_empty = true  # Use original text if command returns empty (default: true)
 
 [output.notification]
 # Show notification when recording starts (hotkey pressed)
@@ -226,6 +247,16 @@ on_transcription = true
 #
 # Custom word replacements (case-insensitive)
 # replacements = { "vox type" = "voxtype" }
+#
+# Smart auto-submit: say "submit" at the end of dictation to press Enter.
+# The word "submit" is stripped from the output text and Enter is pressed.
+# smart_auto_submit = false
+#
+# Remove filler words like "uh" and "um" from transcribed text.
+# Enabled by default. Set filter_filler_words = false to disable, or override
+# the word list via filler_words.
+# filter_filler_words = true
+# filler_words = ["uh", "um", "er", "ah", "eh", "hmm", "hm", "mm", "mhm"]
 
 # [vad]
 # Voice Activity Detection - filters silence-only recordings
@@ -345,6 +376,10 @@ pub struct Config {
     #[serde(default)]
     pub omnilingual: Option<OmnilingualConfig>,
 
+    /// Cohere Transcribe configuration (optional, only used when engine = "cohere")
+    #[serde(default)]
+    pub cohere: Option<CohereConfig>,
+
     /// Text processing configuration (replacements, spoken punctuation)
     #[serde(default)]
     pub text: TextConfig,
@@ -410,6 +445,12 @@ pub struct HotkeyConfig {
     /// Examples: "LEFTSHIFT", "RIGHTALT", "LEFTCTRL"
     #[serde(default)]
     pub model_modifier: Option<String>,
+
+    /// Optional modifier keys that activate named profiles (evdev KEY_* names, without KEY_ prefix)
+    /// When held while pressing the hotkey, activates the named profile for post-processing
+    /// Example: { "LEFTSHIFT" = "translate" } activates [profiles.translate] when Shift is held
+    #[serde(default)]
+    pub profile_modifiers: HashMap<String, String>,
 }
 
 /// Audio capture configuration
@@ -423,6 +464,10 @@ pub struct AudioConfig {
 
     /// Maximum recording duration in seconds (safety limit)
     pub max_duration_secs: u32,
+
+    /// Pause MPRIS media players during recording and resume on stop
+    #[serde(default)]
+    pub pause_media: bool,
 
     /// Audio feedback settings
     #[serde(default)]
@@ -805,6 +850,21 @@ pub struct WhisperConfig {
     #[serde(default)]
     pub gpu_isolation: bool,
 
+    /// GPU device index for Vulkan/CUDA/Metal backend selection.
+    /// On multi-GPU systems, whisper.cpp may select the integrated GPU (index 0)
+    /// instead of the discrete GPU, causing slower transcription.
+    /// Set this to the index of your preferred GPU (e.g., 1 for the second device).
+    /// Leave unset to use the default device (index 0).
+    /// You can also use the GGML_VK_VISIBLE_DEVICES env var for Vulkan filtering.
+    #[serde(default)]
+    pub gpu_device: Option<i32>,
+
+    /// Enable flash attention for GPU inference (default: false)
+    /// Reduces memory bandwidth pressure in the attention layers.
+    /// Requires a compatible GPU backend (CUDA or Vulkan).
+    #[serde(default)]
+    pub flash_attention: bool,
+
     /// Optimize context window for short recordings (default: true)
     /// When enabled, uses a smaller context window proportional to audio length
     /// for clips under 22.5 seconds. This significantly speeds up transcription
@@ -922,6 +982,8 @@ impl Default for WhisperConfig {
             threads: None,
             on_demand_loading: default_on_demand_loading(),
             gpu_isolation: false,
+            gpu_device: None,
+            flash_attention: false,
             context_window_optimization: default_context_window_optimization(),
             eager_processing: false,
             eager_chunk_secs: default_eager_chunk_secs(),
@@ -1008,6 +1070,46 @@ impl Default for MoonshineConfig {
         Self {
             model: "base".to_string(),
             quantized: true,
+            threads: None,
+            on_demand_loading: false,
+        }
+    }
+}
+
+/// Cohere Transcribe speech-to-text configuration (ONNX-based, encoder-decoder).
+/// Requires: cargo build --features cohere
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CohereConfig {
+    /// Model name or directory containing the Cohere ONNX files.
+    /// Expects: cohere-encoder.int8.onnx (+ .data),
+    ///          cohere-decoder.int8.onnx (+ .data),
+    ///          tokens.txt
+    /// Short name: "cohere-transcribe-int8" (default)
+    pub model: String,
+
+    /// Language for transcription. Two-letter ISO 639-1 codes
+    /// (e.g. "en", "fr", "de"). Cohere supports 14 languages.
+    #[serde(default = "default_cohere_language")]
+    pub language: String,
+
+    /// Number of CPU threads for ONNX Runtime inference
+    #[serde(default)]
+    pub threads: Option<usize>,
+
+    /// Load model on-demand when recording starts (true) or keep loaded (false)
+    #[serde(default = "default_on_demand_loading")]
+    pub on_demand_loading: bool,
+}
+
+fn default_cohere_language() -> String {
+    "en".to_string()
+}
+
+impl Default for CohereConfig {
+    fn default() -> Self {
+        Self {
+            model: "cohere-transcribe-int8".to_string(),
+            language: default_cohere_language(),
             threads: None,
             on_demand_loading: false,
         }
@@ -1159,6 +1261,10 @@ pub enum TranscriptionEngine {
     /// Use Omnilingual (FunASR 50+ language CTC encoder via ONNX Runtime)
     /// Requires: cargo build --features omnilingual
     Omnilingual,
+    /// Use Cohere Transcribe (encoder-decoder via ONNX Runtime, Whisper-style
+    /// task tokens). Top of the Open ASR Leaderboard.
+    /// Requires: cargo build --features cohere
+    Cohere,
 }
 
 /// VAD backend selection
@@ -1241,7 +1347,7 @@ impl Default for TranscriptionEngine {
 }
 
 /// Text processing configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TextConfig {
     /// Enable spoken punctuation conversion (e.g., "period" → ".")
     #[serde(default)]
@@ -1251,6 +1357,52 @@ pub struct TextConfig {
     /// Example: { "vox type" = "voxtype" }
     #[serde(default)]
     pub replacements: HashMap<String, String>,
+
+    /// Smart auto-submit: say "submit" at the end of dictation to press Enter.
+    /// The word "submit" is stripped from the output and Enter is pressed.
+    #[serde(default)]
+    pub smart_auto_submit: bool,
+
+    /// Remove common filler words ("uh", "um", etc.) from transcribed text.
+    /// Defaults to false to preserve existing behavior. The list is
+    /// configurable via `filler_words`.
+    #[serde(default)]
+    pub filter_filler_words: bool,
+
+    /// Words removed when `filter_filler_words` is true. Matched
+    /// case-insensitively on word boundaries; surrounding punctuation and
+    /// whitespace are cleaned up after removal.
+    #[serde(default = "default_filler_words")]
+    pub filler_words: Vec<String>,
+}
+
+impl Default for TextConfig {
+    fn default() -> Self {
+        Self {
+            spoken_punctuation: false,
+            replacements: HashMap::new(),
+            smart_auto_submit: false,
+            filter_filler_words: true,
+            filler_words: default_filler_words(),
+        }
+    }
+}
+
+/// Default filler-word list. Conservative: single-syllable disfluencies only.
+/// Multi-word phrases like "you know" or "sort of" are too aggressive for a
+/// default and can be added via the `filler_words` config.
+fn default_filler_words() -> Vec<String> {
+    vec![
+        "uh".to_string(),
+        "um".to_string(),
+        "er".to_string(),
+        "ah".to_string(),
+        "eh".to_string(),
+        "hmm".to_string(),
+        "hm".to_string(),
+        "mm".to_string(),
+        "mhm".to_string(),
+    ]
 }
 
 /// Meeting transcription configuration
@@ -1347,6 +1499,14 @@ pub struct MeetingDiarizationConfig {
     /// Maximum number of speakers to detect
     #[serde(default = "default_max_speakers")]
     pub max_speakers: u32,
+
+    /// Path to ONNX model for ML backend (uses default if not set)
+    #[serde(default)]
+    pub model_path: Option<String>,
+
+    /// Minimum segment duration in milliseconds for ML embedding extraction
+    #[serde(default = "default_min_segment_ms")]
+    pub min_segment_ms: u64,
 }
 
 fn default_diarization_backend() -> String {
@@ -1355,6 +1515,10 @@ fn default_diarization_backend() -> String {
 
 fn default_max_speakers() -> u32 {
     10
+}
+
+fn default_min_segment_ms() -> u64 {
+    500
 }
 
 fn default_chunk_duration() -> u32 {
@@ -1375,6 +1539,8 @@ impl Default for MeetingDiarizationConfig {
             enabled: true,
             backend: default_diarization_backend(),
             max_speakers: default_max_speakers(),
+            model_path: None,
+            min_segment_ms: default_min_segment_ms(),
         }
     }
 }
@@ -1495,6 +1661,18 @@ pub struct PostProcessConfig {
     /// Timeout in milliseconds (default: 30000 = 30 seconds)
     #[serde(default = "default_post_process_timeout")]
     pub timeout_ms: u64,
+
+    /// Whether to trim leading/trailing whitespace from command output (default: true)
+    /// Set to false when the command intentionally produces significant whitespace,
+    /// e.g. a trailing space after sentence-ending punctuation for dictation flow.
+    #[serde(default = "default_true")]
+    pub trim: bool,
+
+    /// Whether to fall back to original text when command output is empty (default: true)
+    /// Set to false when the command intentionally produces empty output,
+    /// e.g. filtering out unwanted transcriptions like [BLANK_AUDIO].
+    #[serde(default = "default_true")]
+    pub fallback_on_empty: bool,
 }
 
 /// Named profile for context-specific settings
@@ -1587,6 +1765,11 @@ pub struct OutputConfig {
     #[serde(default)]
     pub shift_enter_newlines: bool,
 
+    /// Prefix wtype output with a Shift key press/release
+    /// Workaround for apps (e.g., Discord) that drop the first CJK character
+    #[serde(default)]
+    pub wtype_shift_prefix: bool,
+
     /// Command to run when recording starts (e.g., switch to compositor submap)
     /// Useful for entering a mode where cancel keybindings are effective
     #[serde(default)]
@@ -1671,7 +1854,7 @@ impl OutputConfig {
 pub enum OutputMode {
     /// Simulate keyboard input (requires ydotool)
     Type,
-    /// Copy to clipboard (requires wl-copy)
+    /// Copy to clipboard (wl-copy on Wayland, xclip on X11)
     Clipboard,
     /// Copy to clipboard then paste with Ctrl+V (requires wl-copy and ydotool)
     Paste,
@@ -1755,11 +1938,13 @@ impl Default for Config {
                 enabled: true,
                 cancel_key: None,
                 model_modifier: None,
+                profile_modifiers: std::collections::HashMap::new(),
             },
             audio: AudioConfig {
                 device: "default".to_string(),
                 sample_rate: 16000,
                 max_duration_secs: 60,
+                pause_media: false,
                 feedback: AudioFeedbackConfig::default(),
             },
             whisper: WhisperConfig {
@@ -1771,6 +1956,8 @@ impl Default for Config {
                 threads: None,
                 on_demand_loading: default_on_demand_loading(),
                 gpu_isolation: false,
+                gpu_device: None,
+                flash_attention: false,
                 context_window_optimization: default_context_window_optimization(),
                 eager_processing: false,
                 eager_chunk_secs: default_eager_chunk_secs(),
@@ -1797,6 +1984,7 @@ impl Default for Config {
                 auto_submit: false,
                 append_text: None,
                 shift_enter_newlines: false,
+                wtype_shift_prefix: false,
                 pre_recording_command: None,
                 pre_output_command: None,
                 post_output_command: None,
@@ -1816,6 +2004,7 @@ impl Default for Config {
             paraformer: None,
             dolphin: None,
             omnilingual: None,
+            cohere: None,
             text: TextConfig::default(),
             vad: VadConfig::default(),
             status: StatusConfig::default(),
@@ -1924,6 +2113,11 @@ impl Config {
                 .as_ref()
                 .map(|o| o.on_demand_loading)
                 .unwrap_or(false),
+            TranscriptionEngine::Cohere => self
+                .cohere
+                .as_ref()
+                .map(|c| c.on_demand_loading)
+                .unwrap_or(false),
         }
     }
 
@@ -1961,6 +2155,11 @@ impl Config {
                 .as_ref()
                 .map(|o| o.model.as_str())
                 .unwrap_or("omnilingual (not configured)"),
+            TranscriptionEngine::Cohere => self
+                .cohere
+                .as_ref()
+                .map(|c| c.model.as_str())
+                .unwrap_or("cohere (not configured)"),
         }
     }
 
@@ -2029,6 +2228,7 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
             "paraformer" => config.engine = TranscriptionEngine::Paraformer,
             "dolphin" => config.engine = TranscriptionEngine::Dolphin,
             "omnilingual" => config.engine = TranscriptionEngine::Omnilingual,
+            "cohere" => config.engine = TranscriptionEngine::Cohere,
             _ => tracing::warn!("Unknown VOXTYPE_ENGINE value: {}", engine),
         }
     }
@@ -2046,6 +2246,14 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     if let Ok(val) = std::env::var("VOXTYPE_GPU_ISOLATION") {
         config.whisper.gpu_isolation = parse_bool_env(&val);
     }
+    if let Ok(val) = std::env::var("VOXTYPE_GPU_DEVICE") {
+        if let Ok(n) = val.parse::<i32>() {
+            config.whisper.gpu_device = Some(n);
+        }
+    }
+    if let Ok(val) = std::env::var("VOXTYPE_FLASH_ATTENTION") {
+        config.whisper.flash_attention = parse_bool_env(&val);
+    }
     if let Ok(val) = std::env::var("VOXTYPE_ON_DEMAND_LOADING") {
         config.whisper.on_demand_loading = parse_bool_env(&val);
     }
@@ -2062,6 +2270,9 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     if let Ok(val) = std::env::var("VOXTYPE_AUDIO_FEEDBACK") {
         config.audio.feedback.enabled = parse_bool_env(&val);
     }
+    if let Ok(val) = std::env::var("VOXTYPE_PAUSE_MEDIA") {
+        config.audio.pause_media = parse_bool_env(&val);
+    }
 
     // Output
     if let Ok(mode) = std::env::var("VOXTYPE_OUTPUT_MODE") {
@@ -2074,6 +2285,12 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     }
     if let Ok(append_text) = std::env::var("VOXTYPE_APPEND_TEXT") {
         config.output.append_text = Some(append_text);
+    }
+    if std::env::var("VOXTYPE_WTYPE_SHIFT_PREFIX")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        config.output.wtype_shift_prefix = true;
     }
     if let Ok(val) = std::env::var("VOXTYPE_AUTO_SUBMIT") {
         config.output.auto_submit = parse_bool_env(&val);
@@ -2118,6 +2335,12 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
         if let Ok(ms) = val.parse::<u32>() {
             config.output.restore_clipboard_delay_ms = ms;
         }
+    }
+    if let Ok(val) = std::env::var("VOXTYPE_SMART_AUTO_SUBMIT") {
+        config.text.smart_auto_submit = parse_bool_env(&val);
+    }
+    if let Ok(val) = std::env::var("VOXTYPE_FILTER_FILLERS") {
+        config.text.filter_filler_words = parse_bool_env(&val);
     }
 
     Ok(config)
@@ -3623,5 +3846,80 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(!config.output.restore_clipboard);
         assert_eq!(config.output.restore_clipboard_delay_ms, 200);
+    }
+
+    #[test]
+    fn test_parse_profile_modifiers() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [hotkey.profile_modifiers]
+            LEFTSHIFT = "translate"
+            RIGHTALT = "formal"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+
+            [output]
+            mode = "type"
+
+            [profiles.translate]
+            post_process_command = "translate.sh"
+
+            [profiles.formal]
+            post_process_command = "formal.sh"
+            post_process_timeout_ms = 15000
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.hotkey.profile_modifiers.len(), 2);
+        assert_eq!(
+            config.hotkey.profile_modifiers.get("LEFTSHIFT").unwrap(),
+            "translate"
+        );
+        assert_eq!(
+            config.hotkey.profile_modifiers.get("RIGHTALT").unwrap(),
+            "formal"
+        );
+        assert!(config.get_profile("translate").is_some());
+        assert!(config.get_profile("formal").is_some());
+        assert_eq!(
+            config
+                .get_profile("translate")
+                .unwrap()
+                .post_process_command
+                .as_deref(),
+            Some("translate.sh")
+        );
+    }
+
+    #[test]
+    fn test_profile_modifiers_default_empty() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+
+            [output]
+            mode = "type"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.hotkey.profile_modifiers.is_empty());
     }
 }
