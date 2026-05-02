@@ -10,7 +10,8 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{Action, App, COLS, ROWS};
+use super::app::{Action, App, SwitchOutcome, COLS, ROWS};
+use std::process::Command;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let chunks = Layout::default()
@@ -639,7 +640,7 @@ fn render_legend(f: &mut Frame, area: Rect) {
 
 fn render_help(f: &mut Frame, area: Rect) {
     let line = Line::from(Span::styled(
-        " ↑↓←→ navigate matrix   Enter switch   r refresh ",
+        " ↑↓←→ navigate matrix · Enter switch · D start/restart daemon · r refresh ",
         Style::default().fg(Color::Gray),
     ));
     f.render_widget(Paragraph::new(line), area);
@@ -669,6 +670,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             app.refresh_inventory();
             Action::None
         }
+        KeyCode::Char('D') => {
+            start_or_restart_daemon(app);
+            Action::None
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             app.move_cursor(-1, 0);
             Action::None
@@ -691,6 +696,44 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         },
         _ => Action::None,
     }
+}
+
+/// Run `systemctl --user start|restart voxtype` and report the outcome via
+/// the existing General-banner switch outcome line. Choice between start and
+/// restart is based on the cached `daemon_running` flag; refreshing the
+/// inventory afterwards reconciles the displayed status.
+fn start_or_restart_daemon(app: &mut App) {
+    let action = if app.daemon_running { "restart" } else { "start" };
+
+    let result = Command::new("systemctl")
+        .args(["--user", action, "voxtype"])
+        .output();
+
+    let outcome = match result {
+        Ok(out) if out.status.success() => SwitchOutcome {
+            success: true,
+            message: format!("voxtype daemon {}ed", action),
+        },
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let detail = stderr.lines().next().unwrap_or("(no stderr)");
+            SwitchOutcome {
+                success: false,
+                message: format!("systemctl --user {} voxtype failed: {}", action, detail),
+            }
+        }
+        Err(e) => SwitchOutcome {
+            success: false,
+            message: format!(
+                "could not invoke systemctl: {}. Is the user systemd instance running?",
+                e
+            ),
+        },
+    };
+
+    app.last_switch = Some(outcome);
+    app.restart_needed = false;
+    app.refresh_inventory();
 }
 
 /// Variant under the cursor, but only if switching to it makes sense:
