@@ -60,6 +60,9 @@ pub struct App {
     pub sidebar_focused: bool,
     /// `?` toggles a centered help overlay listing every keybinding.
     pub help_open: bool,
+    /// True while the save-on-exit prompt is showing. Cleared when the user
+    /// picks Save (s), Discard (d), or Cancel (Esc/c).
+    pub quit_pending: bool,
     /// If the configured engine's model isn't downloaded, this holds the
     /// model name so the General banner can prompt the user to fetch it.
     /// Computed at load time and on `refresh_inventory()`.
@@ -144,6 +147,7 @@ impl App {
             sidebar_cursor: 0,
             sidebar_focused: true,
             help_open: false,
+            quit_pending: false,
             missing_model: detect_missing_model(),
             hotkey: None,
             audio: None,
@@ -244,6 +248,74 @@ impl App {
         self.inventory = build_inventory(self.force_package_mode);
         self.daemon_running = is_daemon_running();
         self.missing_model = detect_missing_model();
+    }
+
+    /// True when at least one section state has been loaded — the user has
+    /// visited that section, so it might hold unsaved field edits. Used to
+    /// gate the save-on-exit prompt so users who only browse don't get
+    /// asked.
+    pub fn any_section_loaded(&self) -> bool {
+        self.hotkey.is_some()
+            || self.audio.is_some()
+            || self.engine.is_some()
+            || self.output.is_some()
+            || self.text.is_some()
+            || self.vad.is_some()
+            || self.meeting.is_some()
+            || self.notifications.is_some()
+            || self.waybar.is_some()
+            || self.advanced.is_some()
+    }
+
+    /// Save every loaded section to disk. Walks each Option<State> and calls
+    /// the same `save()` path the `s` keybinding uses. Each section reloads
+    /// the on-disk config, applies its current field values, validates, and
+    /// atomically renames — sequential calls compose because each reload sees
+    /// the prior save's output. Returns the count of sections saved so the
+    /// caller can show a feedback line.
+    pub fn save_all_loaded_sections(&mut self) -> usize {
+        let mut count = 0;
+        if let Some(s) = self.hotkey.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.audio.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.engine.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.output.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.text.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.vad.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.meeting.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.notifications.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.waybar.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.advanced.as_mut() {
+            s.save();
+            count += 1;
+        }
+        count
     }
 
     /// Map a (row, col) cell to a Variant if one exists for that combination.

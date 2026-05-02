@@ -141,7 +141,17 @@ fn dispatch_action(
     action: Action,
 ) -> anyhow::Result<LoopControl> {
     match action {
-        Action::Quit => Ok(LoopControl::Quit),
+        // Quit goes through a save-on-exit prompt when any section has been
+        // loaded (the user might have unsaved field edits). If nothing is
+        // loaded, exit immediately — no edits possible.
+        Action::Quit => {
+            if app.any_section_loaded() {
+                app.quit_pending = true;
+                Ok(LoopControl::Continue)
+            } else {
+                Ok(LoopControl::Quit)
+            }
+        }
         Action::SwitchVariant(variant) => {
             // Drop out of the alternate screen so pkexec can prompt.
             leave_terminal(terminal)?;
@@ -155,12 +165,44 @@ fn dispatch_action(
     }
 }
 
+/// Routes keypresses while the save-on-exit prompt is showing.
+///
+/// - `s` save every loaded section's current field values, then quit.
+/// - `d` discard: quit without saving.
+/// - `c` or `Esc` cancel: dismiss the prompt and stay in the TUI.
+/// - anything else is swallowed.
+fn handle_quit_prompt_key(app: &mut App, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
+            app.save_all_loaded_sections();
+            app.quit_pending = false;
+            Action::Quit
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            app.quit_pending = false;
+            Action::Quit
+        }
+        KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Esc => {
+            app.quit_pending = false;
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
 fn handle_global_key(app: &mut App, key: KeyEvent) -> Option<Action> {
     // While the active section is inline-editing a text field, swallow
     // global shortcuts so the user can type 'q', press Esc, etc. into the
     // input. The section's handle_key gets the key instead.
     if app.is_editing() {
         return None;
+    }
+
+    // Save-on-exit prompt: takes precedence over every other key. Only
+    // recognized keys do anything; everything else is swallowed so the
+    // user can't accidentally interact with the obscured TUI.
+    if app.quit_pending {
+        return Some(handle_quit_prompt_key(app, key));
     }
 
     // Help overlay: any key dismisses it (including ?).
@@ -287,6 +329,49 @@ fn draw(f: &mut Frame, app: &App) {
     if app.help_open {
         render_help_overlay(f);
     }
+    if app.quit_pending {
+        render_quit_prompt(f);
+    }
+}
+
+fn render_quit_prompt(f: &mut Frame) {
+    let area = f.area();
+    let w = 60.min(area.width.saturating_sub(4));
+    let h = 7.min(area.height.saturating_sub(2));
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    f.render_widget(ratatui::widgets::Clear, rect);
+
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(" Save before quitting? ");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  s  Save and quit",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(Span::styled(
+            "  d  Discard and quit",
+            Style::default().fg(Color::Red),
+        )),
+        Line::from(Span::styled(
+            "  c / Esc  Cancel",
+            Style::default().fg(Color::Gray),
+        )),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_help_overlay(f: &mut Frame) {
@@ -326,6 +411,12 @@ fn render_help_overlay(f: &mut Frame) {
         Line::from(Span::styled("Sidebar", bold)),
         Line::from("  ↑↓ / jk      Navigate sections"),
         Line::from("  Enter, →, l  Open section / focus content"),
+        Line::from(""),
+        Line::from(Span::styled("General section", bold)),
+        Line::from("  ↑↓←→ / hjkl Navigate variant matrix"),
+        Line::from("  Enter        Switch to variant under cursor"),
+        Line::from("  D            Start or restart the voxtype daemon"),
+        Line::from("  r            Refresh inventory"),
         Line::from(""),
         Line::from(Span::styled("Section forms", bold)),
         Line::from("  ↑↓ / jk      Navigate fields"),
@@ -367,16 +458,19 @@ fn render_title(f: &mut Frame, area: Rect) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    // Global keymap shown in every state. Section forms add `s save · r revert`
+    // when the right pane is focused on an editable section. General has
+    // `R restart daemon` instead.
+    let global = " ? help · q quit ";
+
     let line = if app.sidebar_focused {
-        // Show the highlighted section's summary alongside the keymap so the
-        // user sees what each section covers without opening it.
         let summary = Section::ALL
             .get(app.sidebar_cursor)
             .map(|s| s.summary())
             .unwrap_or("");
         Line::from(vec![
             Span::styled(
-                " ↑↓  Enter open  Tab content  ? help  q quit  ",
+                format!(" ↑↓ navigate · Enter open · Tab content ·{}", global),
                 Style::default().fg(Color::Gray),
             ),
             Span::styled(
@@ -385,8 +479,12 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             ),
         ])
     } else {
+        let section_keys = match app.current_section {
+            Section::General => " D start/restart daemon · r refresh ",
+            _ => " s save · r revert ",
+        };
         Line::from(Span::styled(
-            " Tab / Esc back to sidebar   ? help   q quit ",
+            format!(" Tab/Esc sidebar ·{}·{}", section_keys, global),
             Style::default().fg(Color::Gray),
         ))
     };
