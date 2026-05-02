@@ -26,6 +26,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use pidlock::Pidlock;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
