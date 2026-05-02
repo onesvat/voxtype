@@ -13,6 +13,8 @@
 //! - Optionally Omnilingual via ONNX Runtime (when `omnilingual` feature is enabled)
 
 pub mod cli;
+#[cfg(feature = "parakeet")]
+pub mod parakeet_streaming;
 pub mod remote;
 pub mod streaming;
 pub mod subprocess;
@@ -138,9 +140,15 @@ pub fn create_transcriber(config: &Config) -> Result<Box<dyn Transcriber>, Trans
                     "Parakeet engine selected but [parakeet] config section is missing".to_string(),
                 )
             })?;
-            Ok(Box::new(parakeet::ParakeetTranscriber::new(
-                parakeet_config,
-            )?))
+            if parakeet_config.streaming {
+                Ok(Box::new(
+                    parakeet_streaming::ParakeetStreamingTranscriber::new(parakeet_config)?,
+                ))
+            } else {
+                Ok(Box::new(parakeet::ParakeetTranscriber::new(
+                    parakeet_config,
+                )?))
+            }
         }
         #[cfg(not(feature = "parakeet"))]
         TranscriptionEngine::Parakeet => Err(TranscribeError::InitFailed(
