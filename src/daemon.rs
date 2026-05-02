@@ -715,6 +715,66 @@ impl Daemon {
         }
     }
 
+    /// Start a streaming-mode audio capture.
+    ///
+    /// Like [`start_recording_capture`] but additionally returns a receiver
+    /// of audio chunks for the streaming transcription backend to consume.
+    /// The OSD level emitter still runs and gets the same chunk stream
+    /// (when `level_hub` is configured), so streaming and the audio-level
+    /// OSD coexist without contention on the capture's mpsc.
+    ///
+    /// Returns `(capture, streaming_samples_rx)` on success.
+    async fn start_streaming_capture(
+        &mut self,
+    ) -> std::result::Result<
+        (Box<dyn AudioCapture>, tokio::sync::mpsc::Receiver<Vec<f32>>),
+        (),
+    > {
+        match audio::create_capture(&self.config.audio) {
+            Ok(mut capture) => match capture.start().await {
+                Ok(chunk_rx) => {
+                    // Bounded; backed-up streaming backend drops chunks
+                    // rather than back-pressuring the capture.
+                    let (streaming_tx, streaming_rx) =
+                        tokio::sync::mpsc::channel::<Vec<f32>>(64);
+
+                    if let Some(handle) = self.level_emitter_task.take() {
+                        handle.abort();
+                    }
+                    let handle = if let Some(hub) = &self.level_hub {
+                        audio::levels::spawn_emitter_with_streaming_tap(
+                            chunk_rx,
+                            hub.frame_sink(),
+                            Some(streaming_tx),
+                        )
+                    } else {
+                        // No OSD: still need to drive chunk_rx → streaming_tx.
+                        tokio::spawn(async move {
+                            let mut rx = chunk_rx;
+                            while let Some(chunk) = rx.recv().await {
+                                if streaming_tx.try_send(chunk).is_err() {
+                                    // Backend slow or gone; drop and keep going.
+                                }
+                            }
+                        })
+                    };
+                    self.level_emitter_task = Some(handle);
+                    Ok((capture, streaming_rx))
+                }
+                Err(e) => {
+                    tracing::error!("Failed to start audio: {}", e);
+                    self.play_feedback(SoundEvent::Error);
+                    Err(())
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to create audio capture: {}", e);
+                self.play_feedback(SoundEvent::Error);
+                Err(())
+            }
+        }
+    }
+
     /// Get the transcriber for the current recording session
     ///
     /// For on-demand loading: waits for the background model load task to complete
