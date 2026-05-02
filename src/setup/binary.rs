@@ -481,7 +481,15 @@ pub fn detect_install_kind(binary_path: &Path) -> InstallKind {
 /// active. Returns `None` for source installs, missing symlinks, or unknown
 /// targets.
 pub fn active_variant() -> Option<Variant> {
-    let target = fs::read_link(SYSTEM_BIN).ok()?;
+    // Handle both shapes /usr/bin/voxtype can take: a symlink (CPU
+    // variants) or a wrapper script (GPU/ONNX variants whose binary
+    // lives in a /usr/lib/voxtype/<variant>/ subdir alongside companion
+    // .so files). resolve_active_binary returns the canonical real
+    // binary path in both cases; we look up the variant from its
+    // filename. Falls back to the legacy fs::read_link path for
+    // robustness on edge cases.
+    let target = resolve_active_binary(SYSTEM_BIN)
+        .or_else(|| fs::read_link(SYSTEM_BIN).ok())?;
     let name = target.file_name()?.to_str()?;
     Variant::from_binary_name(name)
 }
