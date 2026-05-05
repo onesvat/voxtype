@@ -9,6 +9,7 @@ use super::hotkey::HotkeyState;
 use super::advanced_section::AdvancedState;
 use super::meeting_section::MeetingState;
 use super::notifications_section::NotificationsState;
+use super::osd_section::OsdState;
 use super::output_section::OutputState;
 use super::section::Section;
 use super::text_section::TextState;
@@ -95,6 +96,7 @@ pub struct App {
     pub vad: Option<VadState>,
     pub meeting: Option<MeetingState>,
     pub notifications: Option<NotificationsState>,
+    pub osd: Option<OsdState>,
     pub waybar: Option<WaybarState>,
     pub advanced: Option<AdvancedState>,
 }
@@ -175,6 +177,7 @@ impl App {
             vad: None,
             meeting: None,
             notifications: None,
+            osd: None,
             waybar: None,
             advanced: None,
         }
@@ -206,6 +209,9 @@ impl App {
             }
             Section::Notifications if self.notifications.is_none() => {
                 self.notifications = NotificationsState::load().ok();
+            }
+            Section::Osd if self.osd.is_none() => {
+                self.osd = OsdState::load().ok();
             }
             Section::Waybar if self.waybar.is_none() => {
                 self.waybar = WaybarState::load().ok();
@@ -281,6 +287,7 @@ impl App {
             || self.vad.is_some()
             || self.meeting.is_some()
             || self.notifications.is_some()
+            || self.osd.is_some()
             || self.waybar.is_some()
             || self.advanced.is_some()
     }
@@ -322,6 +329,10 @@ impl App {
             count += 1;
         }
         if let Some(s) = self.notifications.as_mut() {
+            s.save();
+            count += 1;
+        }
+        if let Some(s) = self.osd.as_mut() {
             s.save();
             count += 1;
         }
