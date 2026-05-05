@@ -127,6 +127,20 @@ impl ConfigEditor {
         self.dirty = true;
     }
 
+    /// Write a TOML float. Use this rather than `set_string` with a
+    /// formatted number so the resulting key is parseable by every
+    /// section's deserializer (TOML 0.x rejects "0.95" as a float in
+    /// strict mode).
+    pub fn set_float(&mut self, table: &str, key: &str, value: f64) {
+        if table.is_empty() {
+            self.document.as_table_mut()[key] = toml_edit::value(value);
+        } else {
+            let item = self.ensure_table(table);
+            item[key] = toml_edit::value(value);
+        }
+        self.dirty = true;
+    }
+
     /// Remove a key from a table (no-op if absent).
     pub fn unset(&mut self, table: &str, key: &str) {
         if let Some(t) = self.table_mut(table) {
@@ -177,6 +191,14 @@ impl ConfigEditor {
 
     pub fn get_int(&self, table: &str, key: &str) -> Option<i64> {
         self.value(table, key)?.as_integer()
+    }
+
+    /// Read a TOML float. Falls back to integer-as-float so a previously
+    /// saved `opacity = 1` keeps loading after the user edits via the TUI
+    /// (which writes back as `opacity = 1.0`).
+    pub fn get_float(&self, table: &str, key: &str) -> Option<f64> {
+        let v = self.value(table, key)?;
+        v.as_float().or_else(|| v.as_integer().map(|n| n as f64))
     }
 
     fn value(&self, table: &str, key: &str) -> Option<&Value> {

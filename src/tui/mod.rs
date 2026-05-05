@@ -15,6 +15,7 @@ mod general;
 mod hotkey;
 mod meeting_section;
 mod notifications_section;
+mod osd_section;
 mod output_section;
 mod section;
 mod sidebar;
@@ -354,6 +355,7 @@ fn handle_section_key(app: &mut App, key: KeyEvent) -> Action {
         Section::Vad => vad_section::handle_key(app, key),
         Section::Meeting => meeting_section::handle_key(app, key),
         Section::Notifications => notifications_section::handle_key(app, key),
+        Section::Osd => osd_section::handle_key(app, key),
         Section::Waybar => waybar_section::handle_key(app, key),
         Section::Advanced => advanced_section::handle_key(app, key),
     }
@@ -557,6 +559,7 @@ fn render_section(f: &mut Frame, area: Rect, app: &App) {
         Section::Vad => vad_section::render(f, area, app),
         Section::Meeting => meeting_section::render(f, area, app),
         Section::Notifications => notifications_section::render(f, area, app),
+        Section::Osd => osd_section::render(f, area, app),
         Section::Waybar => waybar_section::render(f, area, app),
         Section::Advanced => advanced_section::render(f, area, app),
     }

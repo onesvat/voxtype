@@ -11,6 +11,7 @@ pub enum Section {
     Vad,
     Meeting,
     Notifications,
+    Osd,
     Waybar,
     Advanced,
 }
@@ -26,6 +27,7 @@ impl Section {
         Section::Vad,
         Section::Meeting,
         Section::Notifications,
+        Section::Osd,
         Section::Waybar,
         Section::Advanced,
     ];
@@ -41,6 +43,7 @@ impl Section {
             Section::Vad => "VAD",
             Section::Meeting => "Meeting",
             Section::Notifications => "Notifications",
+            Section::Osd => "OSD",
             Section::Waybar => "Waybar",
             Section::Advanced => "Advanced",
         }
@@ -59,6 +62,7 @@ impl Section {
             Section::Vad => "Silero VAD, energy thresholds, eager processing",
             Section::Meeting => "Meeting mode: audio source, diarization, summary",
             Section::Notifications => "Desktop notifications and expire times",
+            Section::Osd => "Floating waveform OSD: frontend, position, size, opacity",
             Section::Waybar => "Status integration: icon theme, overrides",
             Section::Advanced => "GPU isolation, flash attention, on-demand loading",
         }
