@@ -350,8 +350,17 @@ code, pre {
 
 .feature-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    /* Auto-fit handles small viewports gracefully (1 col on phones, 2 on
+       tablets). The desktop override below pins exactly 4 columns at
+       >=1080px so the 12 cards land in three even rows. */
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: var(--space-xl);
+}
+
+@media (min-width: 1080px) {
+    .feature-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
 }
 
 .feature-card {
