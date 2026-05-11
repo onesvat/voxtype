@@ -77,6 +77,43 @@
 
             <!-- v0.7.x Era Posts -->
 
+            <article class="news-article" id="v071">
+                <div class="article-meta">
+                    <time datetime="2026-05-11">May 11, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.7.1: NixOS source build hotfix</h2>
+                <div class="article-body">
+                    <p>Hotfix for v0.7.0 that fixes source builds on NixOS and lands two community contributions for the Nix flake. Binary package users (AUR, .deb, .rpm) get the OSD visibility fix and flake improvements; v0.7.0 binaries already worked correctly for them.</p>
+
+                    <h3>NixOS vulkan build no longer needs GTK3 system libs</h3>
+                    <p>v0.7.0 added <code>tray-icon</code> and <code>rdev</code> as top-level Cargo dependencies. Both crates are consumed only by macOS-specific code, but because they were declared as platform-agnostic, cargo resolved and built them on every platform. <code>tray-icon</code> dragged in <code>libappindicator</code> &rarr; <code>gtk3-sys</code> &rarr; <code>glib-sys</code> &rarr; <code>gdk-pixbuf-sys</code> transitively.</p>
+
+                    <p>Docker-based binary builds happened to install the GTK3 dev stack, so they worked by accident. The NixOS vulkan derivation only declares <code>alsa-lib</code>, <code>openssl</code>, and <code>vulkan-loader</code>, so cargo died on <code>glib-sys</code> when pkg-config could not find <code>glib-2.0.pc</code>.</p>
+
+                    <p><strong>Why use it:</strong> if you build from source on any non-Arch Linux distribution and do not have the full GTK3 development stack installed, v0.7.0 would not compile and v0.7.1 will. NixOS users can drop any <code>glib</code> or <code>gdk-pixbuf</code> workarounds from their flake derivations.</p>
+
+                    <p>Reported by <a href="https://github.com/bashfulrobot">@bashfulrobot</a> in <a href="https://github.com/peteonrails/voxtype/issues/352">Issue #352</a>.</p>
+
+                    <h3>Nix flake: package OSD binaries</h3>
+                    <p>The flake now exposes <code>osdNative</code> and <code>osdGtk4</code> as build targets, so NixOS users get the on-screen visualizer through the standard <code>nix build</code> path instead of needing to build from source manually.</p>
+
+                    <div class="code-block">
+                        <pre><code>nix build github:peteonrails/voxtype#packages.x86_64-linux.osdGtk4
+nix build github:peteonrails/voxtype#packages.x86_64-linux.osdNative</code></pre>
+                    </div>
+
+                    <p>Contributed by <a href="https://github.com/andresilva">@andresilva</a> in <a href="https://github.com/peteonrails/voxtype/pull/354">PR #354</a>.</p>
+
+                    <h3>GTK4 OSD no longer stays visible on startup</h3>
+                    <p>The GTK4 visualizer's initial visibility flag did not match the real GTK state after <code>window.present()</code>, so the first idle check skipped the hide call and left the empty visualizer on screen until you started a recording. Subtle but visible if you launched <code>voxtype-osd-gtk4</code> standalone before dictating for the first time.</p>
+
+                    <p>Contributed by <a href="https://github.com/andresilva">@andresilva</a> in <a href="https://github.com/peteonrails/voxtype/pull/355">PR #355</a>.</p>
+
+                    <p>Full changelog and signed binaries: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.1">v0.7.1 on GitHub</a>.</p>
+                </div>
+            </article>
+
             <article class="news-article" id="v070">
                 <div class="article-meta">
                     <time datetime="2026-05-09">May 9, 2026</time>

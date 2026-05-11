@@ -318,13 +318,23 @@
             <p class="section-subtitle">Recent releases and what they bring</p>
 
             <div class="news-preview-grid">
-                <a href="news/#v070rc2" class="news-preview-card">
+                <a href="news/#v071" class="news-preview-card">
                     <div class="news-preview-meta">
-                        <time datetime="2026-05-06">May 6, 2026</time>
-                        <span class="news-preview-tag">Pre-release</span>
+                        <time datetime="2026-05-11">May 11, 2026</time>
+                        <span class="news-preview-tag">Release</span>
                     </div>
-                    <h3>v0.7.0-rc2: Cohere Transcribe, macOS port, MIGraphX, configure TUI</h3>
-                    <p>Cohere at 9-11&times; realtime on CPU, native macOS via Apple Silicon, MIGraphX 7.2 for AMD GPUs, two CUDA binaries for every NVIDIA driver generation, and a new <code>voxtype configure</code> TUI.</p>
+                    <h3>v0.7.1: NixOS source build hotfix</h3>
+                    <p>Moves <code>tray-icon</code> and <code>rdev</code> under <code>cfg(target_os = "macos")</code> so Linux builds stop pulling in the GTK3 toolchain. Two community contributions land alongside: <code>osdNative</code> and <code>osdGtk4</code> as flake outputs, and a GTK4 OSD startup-visibility fix.</p>
+                    <span class="news-preview-link">Read more &rarr;</span>
+                </a>
+
+                <a href="news/#v070" class="news-preview-card">
+                    <div class="news-preview-meta">
+                        <time datetime="2026-05-09">May 9, 2026</time>
+                        <span class="news-preview-tag">Release</span>
+                    </div>
+                    <h3>v0.7.0: Cohere, macOS, on-screen visualizer, configuration TUI</h3>
+                    <p>Cohere as the eighth engine, full macOS support via Homebrew, GTK4 visualizer that follows swayosd convention, MIGraphX replacing ROCm on AMD, CUDA 12/13 split, and a new interactive <code>voxtype configure</code> TUI.</p>
                     <span class="news-preview-link">Read more &rarr;</span>
                 </a>
 
@@ -335,16 +345,6 @@
                     </div>
                     <h3>v0.6.6: Media Pause, Audio Feedback, KDE Support</h3>
                     <p>Auto-pause your music while dictating. Audio cues when transcription finishes. KDE Plasma compositor keybindings documented. Seven bug fixes across output drivers, text processing, and the remote backend.</p>
-                    <span class="news-preview-link">Read more &rarr;</span>
-                </a>
-
-                <a href="news/#v065" class="news-preview-card">
-                    <div class="news-preview-meta">
-                        <time datetime="2026-03-31">March 31, 2026</time>
-                        <span class="news-preview-tag">Release</span>
-                    </div>
-                    <h3>v0.6.5: Eager Processing, Multi-GPU Device Selection</h3>
-                    <p>Real-time transcription during recording on slower CPUs. Direct control over which GPU runs inference on multi-GPU systems. New English-only Parakeet TDT models.</p>
                     <span class="news-preview-link">Read more &rarr;</span>
                 </a>
             </div>
@@ -859,75 +859,144 @@
                 no dependency conflicts, no activation scripts. It just works, every time you log in.
             </p>
 
+            <p class="install-note" style="margin-bottom: 1.5rem;">
+                <strong>CPU requirement:</strong> Prebuilt Linux binaries target the x86-64-v3 baseline (AVX2 + FMA + BMI1/2).
+                Intel Haswell (2013+) and AMD Excavator (2015+) or any Ryzen are supported. Older CPUs need to build from source with <code>-C target-cpu=native</code>.
+            </p>
+
             <div class="install-tabs">
                 <button class="tab-btn active" data-tab="arch">Arch Linux</button>
                 <button class="tab-btn" data-tab="debian">Debian/Ubuntu</button>
                 <button class="tab-btn" data-tab="fedora">Fedora</button>
+                <button class="tab-btn" data-tab="macos">macOS</button>
+                <button class="tab-btn" data-tab="nixos">NixOS</button>
+                <button class="tab-btn" data-tab="appimage">AppImage</button>
                 <button class="tab-btn" data-tab="source">From Source</button>
             </div>
 
             <div class="install-content">
                 <div id="arch" class="tab-content active">
+                    <p class="install-note">Two AUR packages: <code>voxtype-bin</code> (prebuilt binaries, install in seconds) and <code>voxtype</code> (builds from source via cargo, 20+ minutes). Most users want <code>voxtype-bin</code>.</p>
                     <div class="code-block">
                         <div class="code-header">
                             <span>Install from AUR</span>
-                            <button class="copy-btn" data-copy="paru -S voxtype">Copy</button>
+                            <button class="copy-btn" data-copy="paru -S voxtype-bin">Copy</button>
                         </div>
-                        <pre><code><span class="comment"># Using paru</span>
-paru -S voxtype
+                        <pre><code><span class="comment"># Prebuilt binaries (recommended)</span>
+paru -S voxtype-bin       <span class="comment"># or: yay -S voxtype-bin</span>
 
-<span class="comment"># Or using yay</span>
-yay -S voxtype
+<span class="comment"># Or build from source</span>
+paru -S voxtype           <span class="comment"># or: yay -S voxtype</span>
 
-<span class="comment"># Install optional dependencies</span>
-sudo pacman -S wtype wl-clipboard</code></pre>
+<span class="comment"># Recommended optional dependencies</span>
+sudo pacman -S wtype wl-clipboard libnotify gtk4-layer-shell</code></pre>
                     </div>
+                    <p class="install-note" style="margin-top: 1rem;"><strong>Next:</strong> <a href="#quick-start">First-run setup</a> below.</p>
                 </div>
 
                 <div id="debian" class="tab-content">
-                    <p class="install-note">Requires Ubuntu 24.04+ or Debian Trixie+ (glibc 2.38). Older versions can build from source.</p>
+                    <p class="install-note">Requires Ubuntu 24.04+ or Debian Trixie+ (glibc 2.39). Older versions can build from source.</p>
                     <div class="code-block">
                         <div class="code-header">
                             <span>Install .deb package</span>
-                            <button class="copy-btn">Copy</button>
+                            <button class="copy-btn" data-copy="sudo apt install ./voxtype_0.7.1-1_amd64.deb">Copy</button>
                         </div>
-                        <pre><code><span class="comment"># Download and install (Ubuntu 24.04+, Debian Trixie+)</span>
-wget https://github.com/peteonrails/voxtype/releases/download/v0.6.5/voxtype_0.6.5-1_amd64.deb
-sudo dpkg -i voxtype_0.6.5-1_amd64.deb
-sudo apt-get install -f
+                        <pre><code><span class="comment"># Download and install</span>
+wget https://github.com/peteonrails/voxtype/releases/download/v0.7.1/voxtype_0.7.1-1_amd64.deb
+sudo apt install ./voxtype_0.7.1-1_amd64.deb
 
-<span class="comment"># Install optional dependencies</span>
-sudo apt install wtype wl-clipboard</code></pre>
+<span class="comment"># Recommended optional dependencies</span>
+sudo apt install wtype wl-clipboard libnotify-bin pipewire-alsa playerctl</code></pre>
                     </div>
+                    <p class="install-note" style="margin-top: 1rem;"><strong>Next:</strong> <a href="#quick-start">First-run setup</a> below.</p>
                 </div>
 
                 <div id="fedora" class="tab-content">
-                    <p class="install-note">Requires Fedora 39+ (glibc 2.38).</p>
+                    <p class="install-note">Requires Fedora 40+ (glibc 2.39).</p>
                     <div class="code-block">
                         <div class="code-header">
                             <span>Install RPM package</span>
-                            <button class="copy-btn">Copy</button>
+                            <button class="copy-btn" data-copy="sudo dnf install ./voxtype-0.7.1-1.x86_64.rpm">Copy</button>
                         </div>
-                        <pre><code><span class="comment"># Download and install (Fedora 39+)</span>
-wget https://github.com/peteonrails/voxtype/releases/download/v0.6.5/voxtype-0.6.5-1.x86_64.rpm
-sudo dnf install ./voxtype-0.6.5-1.x86_64.rpm
+                        <pre><code><span class="comment"># Download and install</span>
+wget https://github.com/peteonrails/voxtype/releases/download/v0.7.1/voxtype-0.7.1-1.x86_64.rpm
+sudo dnf install ./voxtype-0.7.1-1.x86_64.rpm
 
-<span class="comment"># Install optional dependencies</span>
-sudo dnf install wtype wl-clipboard</code></pre>
+<span class="comment"># Recommended optional dependencies</span>
+sudo dnf install wtype wl-clipboard libnotify pipewire-alsa playerctl</code></pre>
                     </div>
+                    <p class="install-note" style="margin-top: 1rem;"><strong>Next:</strong> <a href="#quick-start">First-run setup</a> below.</p>
+                </div>
+
+                <div id="macos" class="tab-content">
+                    <p class="install-note">Apple Silicon (arm64) only. Uses Microsoft ONNX Runtime so all engines are available, including Parakeet on the Neural Engine path.</p>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Install via Homebrew</span>
+                            <button class="copy-btn" data-copy="brew install --cask voxtype">Copy</button>
+                        </div>
+                        <pre><code><span class="comment"># Install the signed app bundle</span>
+brew install --cask voxtype
+
+<span class="comment"># First launch opens a setup wizard that walks you through</span>
+<span class="comment"># Accessibility permissions, model download, and the FN-key hotkey.</span></code></pre>
+                    </div>
+                    <p class="install-note" style="margin-top: 1rem;">Or download <code>voxtype-0.7.1-macOS-arm64.dmg</code> from the <a href="https://github.com/peteonrails/voxtype/releases/latest">latest release</a>.</p>
+                </div>
+
+                <div id="nixos" class="tab-content">
+                    <p class="install-note">NixOS users get a flake with packages for every binary variant. Pulls prebuilt ONNX Runtime; CPU-only variant builds entirely from source.</p>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Install via flake</span>
+                            <button class="copy-btn" data-copy="nix profile install github:peteonrails/voxtype/v0.7.1#vulkan">Copy</button>
+                        </div>
+                        <pre><code><span class="comment"># Imperative install</span>
+nix profile install github:peteonrails/voxtype/v0.7.1#vulkan
+
+<span class="comment"># Available outputs: default, vulkan, cuda, rocm, osdGtk4, osdNative</span>
+nix build github:peteonrails/voxtype/v0.7.1#osdGtk4
+
+<span class="comment"># Or pin in your flake inputs</span>
+inputs.voxtype.url = "github:peteonrails/voxtype/v0.7.1";</code></pre>
+                    </div>
+                    <p class="install-note" style="margin-top: 1rem;"><strong>Next:</strong> <a href="#quick-start">First-run setup</a> below.</p>
+                </div>
+
+                <div id="appimage" class="tab-content">
+                    <p class="install-note">Self-contained binary for distros that don't have a packaged voxtype. Three variants: CPU, Vulkan GPU, and ONNX engines.</p>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Download and run</span>
+                            <button class="copy-btn" data-copy="chmod +x voxtype-0.7.1-x86_64.AppImage && ./voxtype-0.7.1-x86_64.AppImage">Copy</button>
+                        </div>
+                        <pre><code><span class="comment"># Download a variant from the latest release</span>
+wget https://github.com/peteonrails/voxtype/releases/download/v0.7.1/voxtype-0.7.1-x86_64.AppImage
+chmod +x voxtype-0.7.1-x86_64.AppImage
+
+<span class="comment"># Run directly, or move to ~/.local/bin/ for permanent install</span>
+./voxtype-0.7.1-x86_64.AppImage --help
+mv voxtype-0.7.1-x86_64.AppImage ~/.local/bin/voxtype</code></pre>
+                    </div>
+                    <p class="install-note" style="margin-top: 1rem;"><strong>Next:</strong> <a href="#quick-start">First-run setup</a> below.</p>
                 </div>
 
                 <div id="source" class="tab-content">
                     <div class="code-block">
                         <div class="code-header">
                             <span>Build from source</span>
-                            <button class="copy-btn">Copy</button>
+                            <button class="copy-btn" data-copy="git clone https://github.com/peteonrails/voxtype && cd voxtype && cargo build --release">Copy</button>
                         </div>
                         <pre><code><span class="comment"># Install Rust (if needed)</span>
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-<span class="comment"># Install build dependencies (Arch)</span>
-sudo pacman -S base-devel clang alsa-lib
+<span class="comment"># Install build dependencies</span>
+<span class="comment">#   Fedora:</span>
+sudo dnf install rust cargo alsa-lib-devel clang-devel cmake pkgconf
+<span class="comment">#   Arch:</span>
+sudo pacman -S rustup alsa-lib clang cmake pkgconf
+<span class="comment">#   Debian/Ubuntu:</span>
+sudo apt install cargo libasound2-dev libclang-dev cmake pkg-config
 
 <span class="comment"># Clone and build</span>
 git clone https://github.com/peteonrails/voxtype
@@ -937,11 +1006,22 @@ cargo build --release
 <span class="comment"># Install</span>
 sudo cp target/release/voxtype /usr/local/bin/</code></pre>
                     </div>
+                    <p class="install-note" style="margin-top: 1rem;">For GPU support: <code>--features gpu-vulkan</code>, <code>--features gpu-cuda</code>, or <code>--features parakeet-migraphx</code>. See <a href="https://github.com/peteonrails/voxtype/blob/main/docs/INSTALL.md">docs/INSTALL.md</a> for the full feature matrix.</p>
+                    <p class="install-note"><strong>Next:</strong> <a href="#quick-start">First-run setup</a> below.</p>
                 </div>
             </div>
 
-            <div class="post-install">
-                <h3>Quick Start</h3>
+            <div class="install-note" style="margin-top: 2rem; padding: 1rem; background: rgba(0,0,0,0.05); border-radius: 6px;">
+                <strong>GPU acceleration.</strong> Every Linux package ships a Vulkan Whisper binary plus per-vendor ONNX engine binaries (CUDA 12, CUDA 13, MIGraphX for AMD). After install, point the wrapper at the right one:
+                <div class="code-block" style="margin-top: 0.75rem;">
+                    <pre><code><span class="comment"># Auto-detect GPU and install runtime, then switch the wrapper</span>
+sudo voxtype setup gpu --enable</code></pre>
+                </div>
+                Runtime packages you may need: <code>vulkan-icd-loader</code> (Vulkan), <code>cuda</code> or <code>cuda12.6</code> (NVIDIA), <code>rocm-hip-runtime</code> 7.x (AMD). Cohere, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, and Omnilingual all run on whichever GPU EP the wrapper resolves to.
+            </div>
+
+            <div id="quick-start" class="post-install">
+                <h3>First-run setup</h3>
 
                 <div class="setup-tabs">
                     <button class="setup-tab-btn active" data-setup="hyprland">Hyprland / Sway / River</button>
