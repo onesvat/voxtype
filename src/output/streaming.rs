@@ -86,20 +86,20 @@ impl StreamingSession {
         &self.partial
     }
 
-    /// Type the delta between the most recent partial and `new_partial`,
-    /// typing extensions or backspacing on rewrites so the cursor always
-    /// reflects the running transcript.
+    /// Type an incremental partial delta at the cursor.
     ///
-    /// Compares character-by-character (Unicode scalars), finds the
-    /// longest common prefix between what is currently typed and
-    /// `new_partial`, backspaces past the divergence if any, and types
-    /// the tail. `typed_chars` is adjusted symmetrically so cancel rewind
-    /// stays accurate.
+    /// `parakeet-rs::ParakeetUnified::transcribe_chunk` returns *only the
+    /// newly-decoded text from that chunk's inference* — not a running
+    /// cumulative transcript. So each `Partial` event carries just the
+    /// new tail, and the right operation is to append it directly. No
+    /// LCP reconciliation needed because the partials are deltas by
+    /// construction; concatenating them in order rebuilds the
+    /// transcript.
     ///
-    /// On output error, the session's typed-state is left consistent with
-    /// what actually reached the cursor: a failed backspace or typing
-    /// step short-circuits and `typed` is updated to the last-known-good
-    /// position. The caller can retry on the next partial.
+    /// `self.partial` accumulates the typed-but-not-yet-finalized tail
+    /// of the current segment so `commit_segment` can know what's
+    /// already at the cursor. `typed_chars` is bumped by the actual
+    /// scalar count for cancel-rewind accounting.
     pub async fn type_partial_delta(
         &mut self,
         chain: &[Box<dyn TextOutput>],
@@ -107,51 +107,23 @@ impl StreamingSession {
         pre_output_command: Option<&str>,
         post_output_command: Option<&str>,
     ) -> Result<(), OutputError> {
-        // Currently-visible cursor content for *this* utterance is
-        // whatever we typed after the last commit. Stored in `self.partial`
-        // for that purpose; it's now load-bearing.
-        let current = &self.partial;
-        if current.as_str() == new_partial.as_str() {
+        if new_partial.is_empty() {
             return Ok(());
         }
 
-        // Char-based LCP.
-        let mut lcp_chars: usize = 0;
-        let mut a = current.chars();
-        let mut b = new_partial.chars();
-        loop {
-            match (a.next(), b.next()) {
-                (Some(x), Some(y)) if x == y => lcp_chars += 1,
-                _ => break,
-            }
-        }
+        let opts = OutputOptions {
+            pre_output_command,
+            post_output_command,
+            // Streaming output runs while the hotkey is held — modifiers
+            // will be down throughout. The modifier-release guard
+            // applies to one-shot (non-streaming) output only.
+            wait_for_modifier_release: false,
+            modifier_release_timeout: std::time::Duration::from_millis(0),
+        };
+        output_with_fallback(chain, &new_partial, opts).await?;
 
-        let current_len = current.chars().count();
-        let backspaces = current_len - lcp_chars;
-        if backspaces > 0 {
-            // Rewrite: remove the divergent suffix at the cursor.
-            let _ = backspace_chars(backspaces).await;
-            // Adjust typed_chars by what we actually un-typed. The
-            // backspace helper is best-effort; if it returned false we
-            // still advance our state so future deltas reconcile from
-            // the new partial. The user sees stale characters at most
-            // until the Final commit reconciles.
-            self.typed_chars = self.typed_chars.saturating_sub(backspaces);
-        }
-
-        let extension: String = new_partial.chars().skip(lcp_chars).collect();
-        if !extension.is_empty() {
-            let opts = OutputOptions {
-                pre_output_command,
-                post_output_command,
-                wait_for_modifier_release: false,
-                modifier_release_timeout: std::time::Duration::from_millis(0),
-            };
-            output_with_fallback(chain, &extension, opts).await?;
-            self.typed_chars += extension.chars().count();
-        }
-
-        self.partial = new_partial;
+        self.typed_chars += new_partial.chars().count();
+        self.partial.push_str(&new_partial);
         Ok(())
     }
 
@@ -191,7 +163,7 @@ impl StreamingSession {
         &mut self,
         chain: &[Box<dyn TextOutput>],
         text: &str,
-        post_process: Option<&PostProcessor>,
+        _post_process: Option<&PostProcessor>,
         pre_output_command: Option<&str>,
         post_output_command: Option<&str>,
     ) -> Result<(), OutputError> {
@@ -200,65 +172,29 @@ impl StreamingSession {
             return Ok(());
         }
 
-        // Run post-process with running context. Note: when partial-delta
-        // typing has been driving the cursor, post-process can't apply
-        // *before* typing — the user already saw the raw partials. We
-        // still run it so finalized_text + status reflect the cleaned
-        // version, and reconcile the cursor below.
-        let to_type: String = if let Some(pp) = post_process {
-            let context = if self.finalized_text.is_empty() {
-                None
-            } else {
-                Some(self.finalized_text.as_str())
-            };
-            pp.process_with_context(text, context).await
-        } else {
-            text.to_string()
+        // Like `transcribe_chunk`, `ParakeetUnified::flush` returns only
+        // the newly-emitted tail buffered when the stream closed — it is
+        // a delta, not a cumulative transcript. So type it directly,
+        // same as a partial.
+        //
+        // post_process is intentionally bypassed during streaming.
+        // Per-segment cleanup would run only against the final tail
+        // (not the cumulative transcript visible at the cursor) and
+        // produce inconsistent output. Users who rely on post_process
+        // should disable streaming for now.
+        let opts = OutputOptions {
+            pre_output_command,
+            post_output_command,
+            wait_for_modifier_release: false,
+            modifier_release_timeout: std::time::Duration::from_millis(0),
         };
+        output_with_fallback(chain, text, opts).await?;
 
-        // If the partial-delta path has been typing as text streamed in,
-        // self.partial is the cursor's current content. Reconcile by
-        // backspacing the divergent suffix and typing the difference.
-        // When commit_segment is called *without* prior partial-delta
-        // typing (cloud streaming providers, future segment-based
-        // finalization), self.partial is empty and this collapses to
-        // the original behavior.
-        let current = self.partial.clone();
-        let mut lcp_chars: usize = 0;
-        let mut a = current.chars();
-        let mut b = to_type.chars();
-        loop {
-            match (a.next(), b.next()) {
-                (Some(x), Some(y)) if x == y => lcp_chars += 1,
-                _ => break,
-            }
-        }
-
-        let current_len = current.chars().count();
-        let backspaces = current_len - lcp_chars;
-        if backspaces > 0 {
-            let _ = backspace_chars(backspaces).await;
-            self.typed_chars = self.typed_chars.saturating_sub(backspaces);
-        }
-
-        let extension: String = to_type.chars().skip(lcp_chars).collect();
-        if !extension.is_empty() {
-            let opts = OutputOptions {
-                pre_output_command,
-                post_output_command,
-                // Streaming output runs while the hotkey is held — the user's
-                // modifiers will be down throughout. Waiting for release would
-                // stall every partial until release, defeating the point of
-                // streaming. The modifier-release guard applies to one-shot
-                // (non-streaming) output only.
-                wait_for_modifier_release: false,
-                modifier_release_timeout: std::time::Duration::from_millis(0),
-            };
-            output_with_fallback(chain, &extension, opts).await?;
-            self.typed_chars += extension.chars().count();
-        }
-
-        self.finalized_text.push_str(text);
+        self.typed_chars += text.chars().count();
+        // Treat the partial-stream-so-far plus this final tail as the
+        // committed text for cancel-rewind context.
+        let finalized_tail = format!("{}{}", self.partial, text);
+        self.finalized_text.push_str(&finalized_tail);
         self.clear_partial();
         Ok(())
     }
@@ -307,27 +243,6 @@ impl Default for StreamingSession {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Emit `count` BackSpace key events via whichever streaming-typing
-/// backend is available. Tries wtype first, then dotool, then ydotool.
-/// Returns true if one of them succeeded. Best-effort: returns false
-/// if no backspace-capable backend is reachable, leaving the caller to
-/// decide how to recover.
-async fn backspace_chars(count: usize) -> bool {
-    if count == 0 {
-        return true;
-    }
-    if try_wtype_backspaces(count).await {
-        return true;
-    }
-    if try_dotool_backspaces(count).await {
-        return true;
-    }
-    if try_ydotool_backspaces(count).await {
-        return true;
-    }
-    false
 }
 
 async fn try_wtype_backspaces(count: usize) -> bool {
