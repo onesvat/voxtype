@@ -1950,6 +1950,32 @@ impl Daemon {
     pub async fn run(&mut self) -> Result<()> {
         tracing::info!("Starting voxtype daemon");
 
+        // Streaming dictation types characters at the cursor while the user is
+        // still holding the PTT key. On Wayland compositors backed by libinput
+        // (Hyprland, Sway, River) those synthetic key events clobber the held-
+        // key state tracker, so the physical key release never fires bindrd and
+        // the daemon gets stuck in streaming. Force toggle activation when
+        // streaming is enabled. The user's config file is left untouched; this
+        // override only applies to the running daemon.
+        if self
+            .config
+            .parakeet
+            .as_ref()
+            .map(|p| p.streaming)
+            .unwrap_or(false)
+            && self.config.hotkey.mode == crate::config::ActivationMode::PushToTalk
+        {
+            tracing::warn!(
+                "Parakeet streaming requires toggle activation, not push-to-talk. \
+                 Auto-promoting [hotkey] mode from push_to_talk to toggle for this session. \
+                 Streaming output types characters at the cursor while you dictate; if your \
+                 PTT key is held during typing, libinput-based compositors (Hyprland, Sway, \
+                 River) lose track of the held-key state and the release event never fires. \
+                 Update your config to set [hotkey] mode = \"toggle\" to silence this warning."
+            );
+            self.config.hotkey.mode = crate::config::ActivationMode::Toggle;
+        }
+
         // Clean up any stale cancel and profile override files from previous runs
         cleanup_cancel_file();
         cleanup_profile_override();

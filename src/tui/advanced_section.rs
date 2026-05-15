@@ -82,13 +82,42 @@ impl AdvancedState {
             _ => ed.unset("whisper", "gpu_device"),
         }
         ed.set_bool("parakeet", "streaming", self.streaming);
+
+        // Streaming dictation requires toggle activation: typing at the cursor
+        // while a PTT key is held confuses libinput's held-key tracker on
+        // Hyprland/Sway/River, so the key-release event never reaches voxtype.
+        // Rewrite the user's hotkey mode rather than silently letting the
+        // daemon fight it at startup.
+        let promoted_hotkey_mode = if self.streaming
+            && ed
+                .get_string("hotkey", "mode")
+                .map(|m| m == "push_to_talk")
+                .unwrap_or(false)
+        {
+            ed.set_string("hotkey", "mode", "toggle");
+            true
+        } else {
+            false
+        };
+
         match ed.save() {
             Ok(()) => {
                 self.dirty_since_load = false;
-                self.feedback = Some((
-                    FeedbackLevel::Ok,
-                    format!("Saved to {}", ed.path().display()),
-                ));
+                self.feedback = if promoted_hotkey_mode {
+                    Some((
+                        FeedbackLevel::Warn,
+                        format!(
+                            "Saved to {}. Streaming requires toggle mode: \
+                             hotkey activation auto-promoted from push_to_talk to toggle.",
+                            ed.path().display()
+                        ),
+                    ))
+                } else {
+                    Some((
+                        FeedbackLevel::Ok,
+                        format!("Saved to {}", ed.path().display()),
+                    ))
+                };
             }
             Err(e) => self.feedback = Some((FeedbackLevel::Err, format!("save: {}", e))),
         }
