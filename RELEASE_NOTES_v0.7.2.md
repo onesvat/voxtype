@@ -141,6 +141,21 @@ Patch contributed by Stephan Schuster.
 - `docs/USER_MANUAL.md` and `docs/CONFIGURATION.md` document the
   streaming requirement and the modifier-release guard.
 
+## Experimental aarch64 binaries
+
+Two new arm64 Linux binaries land in this release: `aarch64-cpu` (the
+Whisper engine, equivalent to the x86_64 `avx2` variant) and
+`aarch64-onnx` (all ONNX engines: Parakeet, Moonshine, SenseVoice,
+Paraformer, Dolphin, Omnilingual, Cohere). Both are CPU-only. No CUDA
+or Vulkan on arm64 in this release, because the Jetson CUDA toolchain
+is awkward and there is no mainstream consumer arm64 hardware with
+Vulkan GPUs to support yet. Target hardware is Raspberry Pi 4/5,
+Ampere Altra servers, Snapdragon X laptops, and AWS Graviton instances.
+These binaries are marked experimental: nobody on the maintenance team
+owns arm64 hardware to smoke-test against, so users who run these and
+report back are the ones validating them in practice. File issues with
+hardware details if something breaks.
+
 ## Acknowledgments
 
 - **André Silva** for the OSD startup-visibility fix and the Nix flake
