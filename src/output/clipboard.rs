@@ -79,6 +79,20 @@ impl TextOutput for ClipboardOutput {
         Ok(())
     }
 
+    async fn send_backspaces(&self, _count: u32) -> Result<(), OutputError> {
+        // Clipboard-only backends don't support actions
+        Err(OutputError::InjectionFailed(
+            "clipboard output does not support backspace actions".to_string(),
+        ))
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        // Clipboard-only backends don't support actions
+        Err(OutputError::InjectionFailed(
+            "clipboard output does not support enter actions".to_string(),
+        ))
+    }
+
     async fn is_available(&self) -> bool {
         Command::new("which")
             .arg("wl-copy")

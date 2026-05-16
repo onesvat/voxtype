@@ -324,9 +324,10 @@ impl MeetingDaemon {
             let context = self.last_chunk_text.get(&source).cloned();
             for segment in &mut result.segments {
                 if !segment.text.is_empty() {
-                    segment.text = post_processor
+                    let processed = post_processor
                         .process_with_context(&segment.text, context.as_deref())
                         .await;
+                    segment.text = processed.text;
                 }
             }
             // Update context for next chunk (per source), using the last non-empty

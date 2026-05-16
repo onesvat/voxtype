@@ -113,6 +113,18 @@ impl TextOutput for PbcopyOutput {
                 .unwrap_or(false)
     }
 
+    async fn send_backspaces(&self, _count: u32) -> Result<(), OutputError> {
+        Err(OutputError::InjectionFailed(
+            "pbcopy output does not support backspace actions".to_string(),
+        ))
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        Err(OutputError::InjectionFailed(
+            "pbcopy output does not support enter actions".to_string(),
+        ))
+    }
+
     fn name(&self) -> &'static str {
         "clipboard (pbcopy)"
     }

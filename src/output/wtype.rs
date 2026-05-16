@@ -192,6 +192,42 @@ impl TextOutput for WtypeOutput {
         Ok(())
     }
 
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let mut cmd = Command::new("wtype");
+        for _ in 0..count {
+            cmd.arg("-k").arg("BackSpace");
+        }
+
+        cmd.stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| OutputError::InjectionFailed(format!("wtype Backspace failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        let output = Command::new("wtype")
+            .args(["-k", "Return"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| OutputError::InjectionFailed(format!("wtype Enter failed: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("Failed to send Enter key: {}", stderr);
+        }
+
+        Ok(())
+    }
+
     async fn is_available(&self) -> bool {
         // Just check if wtype exists in PATH
         // Don't check WAYLAND_DISPLAY - systemd services may not have it

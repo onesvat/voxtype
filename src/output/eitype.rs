@@ -181,6 +181,42 @@ impl TextOutput for EitypeOutput {
         Ok(())
     }
 
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let mut cmd = Command::new("eitype");
+        for _ in 0..count {
+            cmd.arg("-k").arg("backspace");
+        }
+
+        cmd.stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| OutputError::InjectionFailed(format!("eitype Backspace failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        let output = Command::new("eitype")
+            .args(["-k", "return"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| OutputError::InjectionFailed(format!("eitype Enter failed: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("Failed to send Enter key: {}", stderr);
+        }
+
+        Ok(())
+    }
+
     async fn is_available(&self) -> bool {
         // Check if eitype exists in PATH
         Command::new("which")

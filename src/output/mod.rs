@@ -42,6 +42,7 @@ pub use streaming::StreamingSession;
 
 use crate::config::{OutputConfig, OutputDriver};
 use crate::error::OutputError;
+use crate::output::post_process::{OutputActions, ProcessedOutput};
 use std::borrow::Cow;
 use std::fs;
 use std::os::unix::fs::FileTypeExt;
@@ -176,7 +177,7 @@ pub fn engine_icon(engine: crate::config::TranscriptionEngine) -> &'static str {
         crate::config::TranscriptionEngine::Paraformer => "\u{1F4AC}", // 💬
         crate::config::TranscriptionEngine::Dolphin => "\u{1F42C}",  // 🐬
         crate::config::TranscriptionEngine::Omnilingual => "\u{1F30D}", // 🌍
-        crate::config::TranscriptionEngine::Cohere => "\u{1F4DD}",      // 📝
+        crate::config::TranscriptionEngine::Cohere => "\u{1F4DD}",   // 📝
     }
 }
 
@@ -236,6 +237,34 @@ pub async fn send_transcription_notification(
 pub trait TextOutput: Send + Sync {
     /// Output text (type it or copy to clipboard)
     async fn output(&self, text: &str) -> Result<(), OutputError>;
+
+    /// Output text with actions (backspaces before, enter after)
+    /// Default implementation sends backspace keypresses, then text, then Enter if requested
+    async fn output_with_actions(
+        &self,
+        text: &str,
+        actions: &OutputActions,
+    ) -> Result<(), OutputError> {
+        if actions.backspaces > 0 {
+            self.send_backspaces(actions.backspaces).await?;
+        }
+
+        if !text.is_empty() {
+            self.output(text).await?;
+        }
+
+        if actions.enter {
+            self.send_enter().await?;
+        }
+
+        Ok(())
+    }
+
+    /// Send N backspace keypresses
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError>;
+
+    /// Send Enter keypress
+    async fn send_enter(&self) -> Result<(), OutputError>;
 
     /// Check if this output method is available
     async fn is_available(&self) -> bool;
@@ -545,6 +574,60 @@ pub async fn output_with_fallback(
 
     // Run post-output hook if configured (e.g., reset submap)
     // Always run this, even on failure, to ensure cleanup
+    if let Some(cmd) = options.post_output_command {
+        if let Err(e) = run_hook(cmd, "post_output").await {
+            tracing::warn!("{}", e);
+        }
+    }
+
+    result
+}
+
+/// Output text with action headers applied
+///
+/// This function handles backspace keypresses before typing text,
+/// and optionally sends Enter after the text.
+///
+/// Unlike the regular fallback chain, this function does NOT fall back
+/// to the next driver after a destructive action (backspace) starts,
+/// to avoid double-delete scenarios.
+pub async fn output_actions(
+    chain: &[Box<dyn TextOutput>],
+    text: &str,
+    actions: &OutputActions,
+    options: OutputOptions<'_>,
+) -> Result<(), OutputError> {
+    if text.is_empty() && actions.backspaces == 0 && !actions.enter {
+        return Ok(());
+    }
+
+    let normalized_text = normalize_quotes(text);
+
+    if let Some(cmd) = options.pre_output_command {
+        if let Err(e) = run_hook(cmd, "pre_output").await {
+            tracing::warn!("{}", e);
+        }
+    }
+
+    let mut result = Err(OutputError::AllMethodsFailed);
+    for output in chain {
+        if !output.is_available().await {
+            tracing::debug!("{} not available for actions, trying next", output.name());
+            continue;
+        }
+
+        match output.output_with_actions(&normalized_text, actions).await {
+            Ok(()) => {
+                tracing::debug!("Text with actions output via {}", output.name());
+                result = Ok(());
+                break;
+            }
+            Err(e) => {
+                tracing::warn!("{} with actions failed: {}, trying next", output.name(), e);
+            }
+        }
+    }
+
     if let Some(cmd) = options.post_output_command {
         if let Err(e) = run_hook(cmd, "post_output").await {
             tracing::warn!("{}", e);

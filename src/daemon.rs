@@ -16,7 +16,7 @@ use crate::meeting::{self, MeetingDaemon, MeetingEvent, StorageConfig};
 use crate::model_manager::ModelManager;
 use crate::notification;
 use crate::output;
-use crate::output::post_process::PostProcessor;
+use crate::output::post_process::{OutputActions, PostProcessor, ProcessedOutput};
 use crate::output::streaming::StreamingSession;
 use crate::output::TextOutput;
 use crate::state::{ChunkResult, State};
@@ -1720,14 +1720,16 @@ impl Daemon {
                         }
                     });
                     // Apply post-processing command (profile overrides default)
-                    let final_text = if let Some(profile) = active_profile {
+                    let processed_output = if let Some(profile) = active_profile {
                         if let Some(ref cmd) = profile.post_process_command {
                             let timeout_ms = profile.post_process_timeout_ms.unwrap_or(30000);
+                            let enable_control_codes = profile.enable_control_codes.unwrap_or(false);
                             let profile_config = crate::config::PostProcessConfig {
                                 command: cmd.clone(),
                                 timeout_ms,
                                 trim: true,
                                 fallback_on_empty: true,
+                                enable_control_codes,
                             };
                             let profile_processor = PostProcessor::new(&profile_config);
                             tracing::info!(
@@ -1739,11 +1741,13 @@ impl Daemon {
                             let result = profile_processor
                                 .process_with_context(&processed_text, recent_context.as_deref())
                                 .await;
-                            tracing::info!("Post-processed: changed: {}", result != processed_text);
+                            tracing::info!(
+                                "Post-processed: changed: {}",
+                                result.text != processed_text
+                            );
                             tracing::debug!("Post-processed result: {:?}", result);
                             result
                         } else {
-                            // Profile exists but has no post_process_command, use default
                             if let Some(ref post_processor) = self.post_processor {
                                 tracing::info!(
                                     "Post-processing, has_context: {}",
@@ -1762,12 +1766,15 @@ impl Daemon {
                                     .await;
                                 tracing::info!(
                                     "Post-processed: changed: {}",
-                                    result != processed_text
+                                    result.text != processed_text
                                 );
                                 tracing::debug!("Post-processed result: {:?}", result);
                                 result
                             } else {
-                                processed_text
+                                ProcessedOutput {
+                                    text: processed_text,
+                                    actions: OutputActions::default(),
+                                }
                             }
                         }
                     } else if let Some(ref post_processor) = self.post_processor {
@@ -1783,20 +1790,26 @@ impl Daemon {
                         let result = post_processor
                             .process_with_context(&processed_text, recent_context.as_deref())
                             .await;
-                        tracing::info!("Post-processed: changed: {}", result != processed_text);
+                        tracing::info!(
+                            "Post-processed: changed: {}",
+                            result.text != processed_text
+                        );
                         tracing::debug!("Post-processed result: {:?}", result);
                         result
                     } else {
-                        processed_text
+                        ProcessedOutput {
+                            text: processed_text,
+                            actions: OutputActions::default(),
+                        }
                     };
 
                     // Track last dictation for context in subsequent post-processing
-                    self.last_dictation = Some((final_text.clone(), Instant::now()));
+                    self.last_dictation = Some((processed_output.text.clone(), Instant::now()));
 
                     if smart_submit {
                         tracing::debug!(
                             "Smart auto-submit: final text after post-processing: {:?}",
-                            final_text
+                            processed_output.text
                         );
                     }
 
@@ -1830,12 +1843,16 @@ impl Daemon {
 
                     if let Some(output_path) = file_output_path {
                         *state = State::Outputting {
-                            text: final_text.clone(),
+                            text: processed_output.text.clone(),
                         };
 
                         let file_mode = &self.config.output.file_mode;
-                        match write_transcription_to_file(&output_path, &final_text, file_mode)
-                            .await
+                        match write_transcription_to_file(
+                            &output_path,
+                            &processed_output.text,
+                            file_mode,
+                        )
+                        .await
                         {
                             Ok(()) => {
                                 let mode_str = match file_mode {
@@ -1843,6 +1860,11 @@ impl Daemon {
                                     FileMode::Append => "appended",
                                 };
                                 tracing::info!("{} transcription to {:?}", mode_str, output_path);
+                                if !processed_output.actions.backspaces == 0
+                                    || !processed_output.actions.enter
+                                {
+                                    tracing::debug!("File output: ignoring action headers");
+                                }
                                 self.play_feedback(SoundEvent::TranscriptionComplete);
                             }
                             Err(e) => {
@@ -1896,11 +1918,16 @@ impl Daemon {
                         output_config.auto_submit = true;
                     }
 
+                    // If post-process requested Enter, disable auto_submit to avoid double Enter
+                    if processed_output.actions.enter {
+                        output_config.auto_submit = false;
+                    }
+
                     let output_chain = output::create_output_chain(&output_config);
 
                     // Output the text
                     *state = State::Outputting {
-                        text: final_text.clone(),
+                        text: processed_output.text.clone(),
                     };
 
                     let output_options = output::OutputOptions {
@@ -1912,24 +1939,65 @@ impl Daemon {
                         ),
                     };
 
-                    if let Err(e) =
-                        output::output_with_fallback(&output_chain, &final_text, output_options)
-                            .await
-                    {
-                        tracing::error!("Output failed: {}", e);
-                    } else {
+                    // Handle actions: backspace before text output
+                    let mut actions_applied = false;
+                    if processed_output.actions.backspaces > 0 || processed_output.actions.enter {
+                        let output_options_for_actions = output::OutputOptions {
+                            pre_output_command: output_config.pre_output_command.as_deref(),
+                            post_output_command: output_config.post_output_command.as_deref(),
+                        };
+                        match output::output_actions(
+                            &output_chain,
+                            &processed_output.text,
+                            &processed_output.actions,
+                            output_options_for_actions,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                tracing::debug!(
+                                    "Applied actions: backspaces={} enter={}",
+                                    processed_output.actions.backspaces,
+                                    processed_output.actions.enter
+                                );
+                                actions_applied = true;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to apply post-process actions: {}", e);
+                            }
+                        }
+                    }
+
+                    if !actions_applied {
+                        // Fallback to normal text output if actions failed or weren't requested
+                        if let Err(e) = output::output_with_fallback(
+                            &output_chain,
+                            &processed_output.text,
+                            output_options,
+                        )
+                        .await
+                        {
+                            tracing::error!("Output failed: {}", e);
+                        }
+                    }
+
+                    if actions_applied {
                         self.play_feedback(SoundEvent::TranscriptionComplete);
 
                         if self.config.output.notification.on_transcription {
-                            // Send notification on successful output
                             output::send_transcription_notification(
-                                &final_text,
+                                &processed_output.text,
                                 self.config.output.notification.show_engine_icon,
                                 self.config.engine,
                                 &self.config.output.notification.urgency,
                             )
                             .await;
                         }
+                    } else if let Err(e) = {
+                        // Already logged above
+                        Ok::<(), crate::error::OutputError>(())
+                    } {
+                        let _ = e;
                     }
 
                     self.resume_media_players();

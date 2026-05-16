@@ -205,6 +205,59 @@ impl TextOutput for YdotoolOutput {
         Ok(())
     }
 
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let mut cmd = Command::new("ydotool");
+        self.apply_socket_env(&mut cmd);
+        let mut args = Vec::new();
+        for _ in 0..count {
+            args.push("14:1");
+            args.push("14:0");
+        }
+        cmd.args(["key"]).args(&args);
+
+        let output = cmd
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| {
+                OutputError::InjectionFailed(format!("ydotool Backspace failed: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(OutputError::InjectionFailed(format!(
+                "ydotool Backspace failed: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        let mut cmd = Command::new("ydotool");
+        self.apply_socket_env(&mut cmd);
+        let enter_output = cmd
+            .args(["key", "28:1", "28:0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| OutputError::InjectionFailed(format!("ydotool Enter failed: {}", e)))?;
+
+        if !enter_output.status.success() {
+            let stderr = String::from_utf8_lossy(&enter_output.stderr);
+            tracing::warn!("Failed to send Enter key: {}", stderr);
+        }
+
+        Ok(())
+    }
+
     async fn is_available(&self) -> bool {
         // Check if ydotool exists in PATH
         let which_result = Command::new("which")

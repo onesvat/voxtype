@@ -142,6 +142,59 @@ tell application "System Events" to key code 36"#,
         Ok(())
     }
 
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let mut script = String::new();
+        for _ in 0..count {
+            script.push_str(
+                r#"tell application "System Events" to key code 51
+"#,
+            ); // 51 = Delete/Backspace
+        }
+
+        let output = Command::new("osascript")
+            .args(["-e", &script])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| {
+                OutputError::InjectionFailed(format!("osascript Backspace failed: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(OutputError::InjectionFailed(format!(
+                "osascript Backspace failed: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        let script = r#"tell application "System Events" to key code 36"#;
+
+        let output = Command::new("osascript")
+            .args(["-e", script])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| OutputError::InjectionFailed(format!("osascript Enter failed: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("Failed to send Enter key: {}", stderr);
+        }
+
+        Ok(())
+    }
+
     async fn is_available(&self) -> bool {
         // osascript is always available on macOS
         cfg!(target_os = "macos")

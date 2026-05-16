@@ -189,6 +189,7 @@ impl CGEventOutput {
 
 // macOS virtual key codes (from Carbon HIToolbox Events.h)
 const KEYCODE_RETURN: CGKeyCode = 0x24;
+const KEYCODE_DELETE: CGKeyCode = 0x33;
 
 #[async_trait::async_trait]
 impl TextOutput for CGEventOutput {
@@ -234,6 +235,45 @@ impl TextOutput for CGEventOutput {
         if self.notify {
             self.send_notification(text).await;
         }
+
+        Ok(())
+    }
+
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        if !Self::check_accessibility_permission() {
+            return Err(OutputError::InjectionFailed(
+                "Accessibility permission required.".into(),
+            ));
+        }
+
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| OutputError::InjectionFailed("Failed to create CGEventSource".into()))?;
+
+        for _ in 0..count {
+            Self::press_key(&source, KEYCODE_DELETE, CGEventFlags::empty())?;
+            if self.type_delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(self.type_delay_ms as u64));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        if !Self::check_accessibility_permission() {
+            return Err(OutputError::InjectionFailed(
+                "Accessibility permission required.".into(),
+            ));
+        }
+
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| OutputError::InjectionFailed("Failed to create CGEventSource".into()))?;
+
+        Self::press_key(&source, KEYCODE_RETURN, CGEventFlags::empty())?;
 
         Ok(())
     }

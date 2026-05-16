@@ -21,12 +21,29 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+const MAX_BACKSPACES: u32 = 4096;
+
+/// Parsed action headers from post-process output
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OutputActions {
+    pub backspaces: u32,
+    pub enter: bool,
+}
+
+/// Result of post-processing with optional actions
+#[derive(Debug, Clone)]
+pub struct ProcessedOutput {
+    pub text: String,
+    pub actions: OutputActions,
+}
+
 /// Post-processor that runs an external command on transcribed text
 pub struct PostProcessor {
     command: String,
     timeout: Duration,
     trim: bool,
     fallback_on_empty: bool,
+    actions_enabled: bool,
 }
 
 impl PostProcessor {
@@ -37,6 +54,53 @@ impl PostProcessor {
             timeout: Duration::from_millis(config.timeout_ms),
             trim: config.trim,
             fallback_on_empty: config.fallback_on_empty,
+            actions_enabled: config.enable_control_codes,
+        }
+    }
+
+    /// Parse action headers from the beginning of text
+    ///
+    /// Supported leading headers:
+    /// - `<<<VOXTYPE:BACKSPACE=N>>>` - delete N characters
+    /// - `<<<VOXTYPE:ENTER>>>` - press Enter after text
+    ///
+    /// Multiple headers are allowed. Malformed headers are treated as literal text.
+    pub fn parse_actions(text: &str, actions_enabled: bool) -> ProcessedOutput {
+        if !actions_enabled {
+            return ProcessedOutput {
+                text: text.to_string(),
+                actions: OutputActions::default(),
+            };
+        }
+
+        let mut remaining = text;
+        let mut actions = OutputActions::default();
+
+        loop {
+            if let Some(rest) = remaining.strip_prefix("<<<VOXTYPE:BACKSPACE=") {
+                if let Some(end) = rest.find(">>>") {
+                    let num_str = &rest[..end];
+                    if let Ok(n) = num_str.parse::<u32>() {
+                        actions.backspaces =
+                            actions.backspaces.saturating_add(n).min(MAX_BACKSPACES);
+                        remaining = &rest[end + 3..];
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(rest) = remaining.strip_prefix("<<<VOXTYPE:ENTER>>>") {
+                actions.enter = true;
+                remaining = rest;
+                continue;
+            }
+
+            break;
+        }
+
+        ProcessedOutput {
+            text: remaining.to_string(),
+            actions,
         }
     }
 
@@ -45,39 +109,44 @@ impl PostProcessor {
     /// When context is provided, it is passed via the VOXTYPE_CONTEXT environment
     /// variable so the post-processing command can use it for continuity.
     /// Stdin always contains only the current text, keeping existing scripts compatible.
-    /// Returns the processed text on success, or the original text on any failure.
-    pub async fn process_with_context(&self, text: &str, context: Option<&str>) -> String {
+    /// Returns the processed output with any parsed actions.
+    pub async fn process_with_context(&self, text: &str, context: Option<&str>) -> ProcessedOutput {
         match self.execute_command_with_env(text, context).await {
             Ok(processed) => {
                 if processed.is_empty() && self.fallback_on_empty {
                     tracing::warn!(
                         "Post-process command returned empty output, using original text"
                     );
-                    text.to_string()
+                    Self::parse_actions(text, self.actions_enabled)
                 } else if processed.is_empty() {
                     tracing::debug!("Post-process command returned empty output");
-                    String::new()
+                    ProcessedOutput {
+                        text: String::new(),
+                        actions: OutputActions::default(),
+                    }
                 } else {
                     tracing::debug!(
                         "Post-processed ({} -> {} chars)",
                         text.len(),
                         processed.len()
                     );
-                    processed
+                    Self::parse_actions(&processed, self.actions_enabled)
                 }
             }
             Err(e) => {
                 tracing::warn!("Post-process command failed: {}, using original text", e);
-                text.to_string()
+                ProcessedOutput {
+                    text: text.to_string(),
+                    actions: OutputActions::default(),
+                }
             }
         }
     }
 
     /// Process text through the external command
     ///
-    /// Returns the processed text on success, or the original text on any failure.
-    /// This ensures voice-to-text always produces output even when post-processing fails.
-    pub async fn process(&self, text: &str) -> String {
+    /// Returns the processed output with any parsed actions.
+    pub async fn process(&self, text: &str) -> ProcessedOutput {
         self.process_with_context(text, None).await
     }
 
@@ -188,6 +257,7 @@ mod tests {
             timeout_ms,
             trim: true,
             fallback_on_empty: true,
+            enable_control_codes: false,
         }
     }
 
@@ -196,7 +266,7 @@ mod tests {
         let config = make_config("cat", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("hello world").await;
-        assert_eq!(result, "hello world");
+        assert_eq!(result.text, "hello world");
     }
 
     #[tokio::test]
@@ -204,7 +274,7 @@ mod tests {
         let config = make_config("sed 's/foo/bar/g'", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("foo bar foo").await;
-        assert_eq!(result, "bar bar bar");
+        assert_eq!(result.text, "bar bar bar");
     }
 
     #[tokio::test]
@@ -212,15 +282,15 @@ mod tests {
         let config = make_config("tr '[:lower:]' '[:upper:]'", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("hello world").await;
-        assert_eq!(result, "HELLO WORLD");
+        assert_eq!(result.text, "HELLO WORLD");
     }
 
     #[tokio::test]
     async fn test_timeout_fallback() {
-        let config = make_config("sleep 10", 100); // 100ms timeout
+        let config = make_config("sleep 10", 100);
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "original text"); // Falls back to original
+        assert_eq!(result.text, "original text");
     }
 
     #[tokio::test]
@@ -228,17 +298,15 @@ mod tests {
         let config = make_config("exit 1", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "original text"); // Falls back to original
+        assert_eq!(result.text, "original text");
     }
 
     #[tokio::test]
     async fn test_empty_output_fallback() {
-        // printf '' outputs nothing, which should trigger fallback
-        // (echo -n is not portable across platforms)
         let config = make_config("printf ''", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "original text"); // Falls back to original
+        assert_eq!(result.text, "original text");
     }
 
     #[tokio::test]
@@ -246,7 +314,7 @@ mod tests {
         let config = make_config("nonexistent_command_xyz_12345", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "original text"); // Falls back to original
+        assert_eq!(result.text, "original text");
     }
 
     #[tokio::test]
@@ -254,7 +322,7 @@ mod tests {
         let config = make_config("cat", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("line one\nline two\nline three").await;
-        assert_eq!(result, "line one\nline two\nline three");
+        assert_eq!(result.text, "line one\nline two\nline three");
     }
 
     #[tokio::test]
@@ -262,156 +330,208 @@ mod tests {
         let config = make_config("cat", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("Hello 世界! 🎉").await;
-        assert_eq!(result, "Hello 世界! 🎉");
+        assert_eq!(result.text, "Hello 世界! 🎉");
     }
 
     #[tokio::test]
     async fn test_whitespace_trimming() {
-        // Output has trailing newline which should be trimmed
-        // Use printf with \n to be portable across platforms
         let config = make_config("printf 'hello\\n'", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("ignored").await;
-        assert_eq!(result, "hello");
+        assert_eq!(result.text, "hello");
     }
 
     #[tokio::test]
     async fn test_complex_shell_command() {
-        // Test that complex shell commands work (pipes, quotes, etc.)
         let config = make_config("echo 'prefix:' && cat", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("test input").await;
-        assert_eq!(result, "prefix:\ntest input");
+        assert_eq!(result.text, "prefix:\ntest input");
     }
 
     #[tokio::test]
     async fn test_no_trim_preserves_trailing_space() {
-        // When trim = false, trailing spaces from the command should be preserved
         let config = PostProcessConfig {
             command: "printf '%s ' \"$( cat )\"".to_string(),
             timeout_ms: 5000,
             trim: false,
             fallback_on_empty: true,
+            enable_control_codes: false,
         };
         let processor = PostProcessor::new(&config);
         let result = processor.process("hello world.").await;
-        assert_eq!(result, "hello world. ");
+        assert_eq!(result.text, "hello world. ");
     }
 
     #[tokio::test]
     async fn test_no_trim_still_strips_trailing_newlines() {
-        // Even with trim = false, trailing newlines (shell artifacts) are stripped
         let config = PostProcessConfig {
             command: "echo 'hello'".to_string(),
             timeout_ms: 5000,
             trim: false,
             fallback_on_empty: true,
+            enable_control_codes: false,
         };
         let processor = PostProcessor::new(&config);
         let result = processor.process("ignored").await;
-        assert_eq!(result, "hello");
+        assert_eq!(result.text, "hello");
     }
 
     #[tokio::test]
     async fn test_no_fallback_on_empty_returns_empty() {
-        // When fallback_on_empty = false, empty output is returned as-is
         let config = PostProcessConfig {
             command: "printf ''".to_string(),
             timeout_ms: 5000,
             trim: true,
             fallback_on_empty: false,
+            enable_control_codes: false,
         };
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "");
+        assert_eq!(result.text, "");
     }
 
     #[tokio::test]
     async fn test_fallback_on_empty_default_returns_original() {
-        // Default behavior: empty output falls back to original text
         let config = make_config("printf ''", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "original text");
+        assert_eq!(result.text, "original text");
     }
 
     #[tokio::test]
     async fn test_no_trim_no_fallback_combination() {
-        // Both options off: whatever the command emits is returned verbatim,
-        // empty included.
         let config = PostProcessConfig {
             command: "printf ''".to_string(),
             timeout_ms: 5000,
             trim: false,
             fallback_on_empty: false,
+            enable_control_codes: false,
         };
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "");
+        assert_eq!(result.text, "");
     }
 
     #[tokio::test]
     async fn test_trim_then_empty_triggers_fallback() {
-        // Whitespace-only output should be considered empty after trimming,
-        // and trigger the fallback when fallback_on_empty is on.
         let config = PostProcessConfig {
             command: "printf '   \\n  '".to_string(),
             timeout_ms: 5000,
             trim: true,
             fallback_on_empty: true,
+            enable_control_codes: false,
         };
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "original text");
+        assert_eq!(result.text, "original text");
     }
 
     #[tokio::test]
     async fn test_trim_then_empty_no_fallback_returns_empty() {
-        // Same scenario but fallback off: empty string surfaces.
         let config = PostProcessConfig {
             command: "printf '   \\n  '".to_string(),
             timeout_ms: 5000,
             trim: true,
             fallback_on_empty: false,
+            enable_control_codes: false,
         };
         let processor = PostProcessor::new(&config);
         let result = processor.process("original text").await;
-        assert_eq!(result, "");
+        assert_eq!(result.text, "");
     }
 
     #[tokio::test]
     async fn test_context_passed_via_env_var() {
-        // Command prints VOXTYPE_CONTEXT env var, stdin is current text
         let config = make_config("echo \"context:$VOXTYPE_CONTEXT stdin:$(cat)\"", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor
             .process_with_context("current text", Some("previous text"))
             .await;
-        assert_eq!(result, "context:previous text stdin:current text");
+        assert_eq!(result.text, "context:previous text stdin:current text");
     }
 
     #[tokio::test]
     async fn test_no_context_env_var_when_none() {
-        // VOXTYPE_CONTEXT should not be set when context is None
         let config = make_config(
             "echo \"context:${VOXTYPE_CONTEXT:-unset} stdin:$(cat)\"",
             5000,
         );
         let processor = PostProcessor::new(&config);
         let result = processor.process_with_context("current text", None).await;
-        assert_eq!(result, "context:unset stdin:current text");
+        assert_eq!(result.text, "context:unset stdin:current text");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_context_env_not_inherited_from_parent() {
-        // Even if VOXTYPE_CONTEXT is set in parent env, it should be cleared when context is None.
-        // Uses current_thread runtime because std::env::set_var is not thread-safe
-        // and will become unsafe in Rust edition 2024.
         std::env::set_var("VOXTYPE_CONTEXT", "stale parent context");
         let config = make_config("echo \"${VOXTYPE_CONTEXT:-unset}\"", 5000);
         let processor = PostProcessor::new(&config);
         let result = processor.process_with_context("text", None).await;
         std::env::remove_var("VOXTYPE_CONTEXT");
-        assert_eq!(result, "unset");
+        assert_eq!(result.text, "unset");
+    }
+
+    // Action parsing tests
+
+    #[test]
+    fn test_parse_actions_disabled() {
+        let output = PostProcessor::parse_actions("<<<VOXTYPE:BACKSPACE=3>>>hello", false);
+        assert_eq!(output.text, "<<<VOXTYPE:BACKSPACE=3>>>hello");
+        assert_eq!(output.actions, OutputActions::default());
+    }
+
+    #[test]
+    fn test_parse_actions_backspace() {
+        let output = PostProcessor::parse_actions("<<<VOXTYPE:BACKSPACE=3>>>hello", true);
+        assert_eq!(output.text, "hello");
+        assert_eq!(output.actions.backspaces, 3);
+        assert!(!output.actions.enter);
+    }
+
+    #[test]
+    fn test_parse_actions_enter() {
+        let output = PostProcessor::parse_actions("<<<VOXTYPE:ENTER>>>hello", true);
+        assert_eq!(output.text, "hello");
+        assert_eq!(output.actions.backspaces, 0);
+        assert!(output.actions.enter);
+    }
+
+    #[test]
+    fn test_parse_actions_multiple_headers() {
+        let output =
+            PostProcessor::parse_actions("<<<VOXTYPE:BACKSPACE=2>>><<<VOXTYPE:ENTER>>>hello", true);
+        assert_eq!(output.text, "hello");
+        assert_eq!(output.actions.backspaces, 2);
+        assert!(output.actions.enter);
+    }
+
+    #[test]
+    fn test_parse_actions_malformed_header() {
+        let output = PostProcessor::parse_actions("<<<VOXTYPE:BACKSPACE=abc>>>hello", true);
+        assert_eq!(output.text, "<<<VOXTYPE:BACKSPACE=abc>>>hello");
+        assert_eq!(output.actions, OutputActions::default());
+    }
+
+    #[test]
+    fn test_parse_actions_clamp() {
+        let output = PostProcessor::parse_actions("<<<VOXTYPE:BACKSPACE=99999>>>hello", true);
+        assert_eq!(output.text, "hello");
+        assert_eq!(output.actions.backspaces, MAX_BACKSPACES);
+    }
+
+    #[test]
+    fn test_parse_actions_header_only() {
+        let output = PostProcessor::parse_actions("<<<VOXTYPE:ENTER>>>", true);
+        assert_eq!(output.text, "");
+        assert!(output.actions.enter);
+        assert_eq!(output.actions.backspaces, 0);
+    }
+
+    #[test]
+    fn test_parse_actions_no_actions() {
+        let output = PostProcessor::parse_actions("just text", true);
+        assert_eq!(output.text, "just text");
+        assert_eq!(output.actions, OutputActions::default());
     }
 }

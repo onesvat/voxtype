@@ -328,10 +328,7 @@ pub fn default_config_content() -> String {
     #[cfg(target_os = "macos")]
     {
         DEFAULT_CONFIG
-            .replace(
-                "key = \"SCROLLLOCK\"",
-                "key = \"FN\"",
-            )
+            .replace("key = \"SCROLLLOCK\"", "key = \"FN\"")
             .replace(
                 "# Common choices: SCROLLLOCK, PAUSE, RIGHTALT, F13-F24",
                 "# Common choices: FN, RIGHTALT, F13-F24",
@@ -1768,6 +1765,12 @@ pub struct PostProcessConfig {
     /// e.g. filtering out unwanted transcriptions like [BLANK_AUDIO].
     #[serde(default = "default_true")]
     pub fallback_on_empty: bool,
+
+    /// Whether to interpret action headers in post-process output (default: false)
+    /// When true, leading `<<<VOXTYPE:BACKSPACE=N>>>` and `<<<VOXTYPE:ENTER>>>`
+    /// headers are parsed and applied as keyboard actions.
+    #[serde(default)]
+    pub enable_control_codes: bool,
 }
 
 /// Named profile for context-specific settings
@@ -1800,6 +1803,11 @@ pub struct Profile {
     /// Output mode override for this profile
     #[serde(default)]
     pub output_mode: Option<OutputMode>,
+
+    /// Enable control codes for post-process output in this profile
+    /// If not set, falls back to global [output.post_process].enable_control_codes
+    #[serde(default)]
+    pub enable_control_codes: Option<bool>,
 }
 
 fn default_post_process_timeout() -> u64 {
@@ -2353,9 +2361,7 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
             tracing::debug!("Config file not found at {:?}, using defaults", path);
         }
     } else {
-        tracing::debug!(
-            "No config file found at user or system path, using built-in defaults"
-        );
+        tracing::debug!("No config file found at user or system path, using built-in defaults");
     }
 
     // Override from environment variables
@@ -4081,7 +4087,10 @@ mod tests {
 
     #[test]
     fn test_system_path_constant() {
-        assert_eq!(Config::system_path(), PathBuf::from("/etc/voxtype/config.toml"));
+        assert_eq!(
+            Config::system_path(),
+            PathBuf::from("/etc/voxtype/config.toml")
+        );
         assert_eq!(Config::SYSTEM_PATH, "/etc/voxtype/config.toml");
     }
 

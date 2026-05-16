@@ -161,6 +161,34 @@ impl TextOutput for DotoolOutput {
         Ok(())
     }
 
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        let mut commands = String::new();
+        if self.type_delay_ms > 0 {
+            commands.push_str(&format!("typedelay {}\n", self.type_delay_ms));
+            commands.push_str(&format!("typehold {}\n", self.type_delay_ms));
+        }
+        for _ in 0..count {
+            commands.push_str("key backspace\n");
+        }
+
+        self.run_dotool_commands(&commands).await
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        let mut commands = String::new();
+        if self.type_delay_ms > 0 {
+            commands.push_str(&format!("typedelay {}\n", self.type_delay_ms));
+            commands.push_str(&format!("typehold {}\n", self.type_delay_ms));
+        }
+        commands.push_str("key enter\n");
+
+        self.run_dotool_commands(&commands).await
+    }
+
     async fn is_available(&self) -> bool {
         // Check if dotool exists in PATH
         Command::new("which")
@@ -175,6 +203,51 @@ impl TextOutput for DotoolOutput {
 
     fn name(&self) -> &'static str {
         "dotool"
+    }
+}
+
+impl DotoolOutput {
+    async fn run_dotool_commands(&self, commands: &str) -> Result<(), OutputError> {
+        let mut cmd = Command::new("dotool");
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        if let Some(ref layout) = self.xkb_layout {
+            cmd.env("DOTOOL_XKB_LAYOUT", layout);
+        }
+        if let Some(ref variant) = self.xkb_variant {
+            cmd.env("DOTOOL_XKB_VARIANT", variant);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                OutputError::DotoolNotFound
+            } else {
+                OutputError::InjectionFailed(format!("Failed to spawn dotool: {}", e))
+            }
+        })?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(commands.as_bytes()).await.map_err(|e| {
+                OutputError::InjectionFailed(format!("Failed to write to dotool stdin: {}", e))
+            })?;
+            drop(stdin);
+        }
+
+        let output = child.wait_with_output().await.map_err(|e| {
+            OutputError::InjectionFailed(format!("Failed to wait for dotool: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(OutputError::InjectionFailed(format!(
+                "dotool exited with error: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
     }
 }
 

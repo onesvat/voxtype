@@ -929,6 +929,123 @@ impl TextOutput for PasteOutput {
     fn name(&self) -> &'static str {
         "paste (clipboard + keystroke)"
     }
+
+    async fn send_backspaces(&self, count: u32) -> Result<(), OutputError> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        for _ in 0..count {
+            if self.is_wtype_available().await {
+                let output = Command::new("wtype")
+                    .args(["-k", "BackSpace"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        continue;
+                    }
+                }
+            }
+
+            if self.is_eitype_available().await {
+                let output = Command::new("eitype")
+                    .args(["-k", "backspace"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        continue;
+                    }
+                }
+            }
+
+            if self.is_ydotool_available().await {
+                let mut cmd = Command::new("ydotool");
+                if let Some(socket) = find_ydotool_socket() {
+                    cmd.env("YDOTOOL_SOCKET", socket);
+                }
+                let output = cmd
+                    .args(["key", "14:1", "14:0"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        continue;
+                    }
+                }
+            }
+
+            return Err(OutputError::InjectionFailed(
+                "Failed to send Backspace via paste mode".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn send_enter(&self) -> Result<(), OutputError> {
+        if self.is_wtype_available().await {
+            let output = Command::new("wtype")
+                .args(["-k", "Return"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .await;
+
+            if let Ok(out) = output {
+                if out.status.success() {
+                    return Ok(());
+                }
+            }
+        }
+
+        if self.is_eitype_available().await {
+            let output = Command::new("eitype")
+                .args(["-k", "return"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .await;
+
+            if let Ok(out) = output {
+                if out.status.success() {
+                    return Ok(());
+                }
+            }
+        }
+
+        if self.is_ydotool_available().await {
+            let mut cmd = Command::new("ydotool");
+            if let Some(socket) = find_ydotool_socket() {
+                cmd.env("YDOTOOL_SOCKET", socket);
+            }
+            let output = cmd
+                .args(["key", "28:1", "28:0"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .await;
+
+            if let Ok(out) = output {
+                if out.status.success() {
+                    return Ok(());
+                }
+            }
+        }
+
+        tracing::warn!("Failed to send Enter key via paste mode");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
