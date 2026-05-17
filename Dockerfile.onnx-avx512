@@ -47,9 +47,11 @@ WORKDIR /build
 COPY . .
 
 # Cross-compile to the x86-64-v4 microarch level (AVX-512F+BW+CD+DQ+VL).
-# The build host does not need to execute AVX-512 to emit it. See the comment
-# in Dockerfile.avx512 for the rationale.
-ENV RUSTFLAGS="-C target-cpu=x86-64-v4"
+# RUSTFLAGS applied globally crashes host-side build scripts and proc macros
+# with SIGILL on a non-AVX-512 builder, so we use the per-target rustflags
+# env var plus `--target` so cargo separates host from target compilation.
+# See Dockerfile.avx512 for the full rationale.
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=x86-64-v4"
 ENV CFLAGS="-march=x86-64-v4"
 ENV CXXFLAGS="-march=x86-64-v4"
 
@@ -58,10 +60,10 @@ ENV ORT_STRATEGY=download
 
 # Disable LTO for faster builds
 # Build with all ONNX engines
-RUN cargo build --release --features parakeet,moonshine,sensevoice,paraformer,dolphin,omnilingual,cohere,ml-diarization \
+RUN cargo build --release --target x86_64-unknown-linux-gnu --features parakeet,moonshine,sensevoice,paraformer,dolphin,omnilingual,cohere,ml-diarization \
     --config 'profile.release.lto=false' \
     --config 'profile.release.codegen-units=8' \
-    && cp target/release/voxtype /tmp/voxtype-onnx-avx512
+    && cp target/x86_64-unknown-linux-gnu/release/voxtype /tmp/voxtype-onnx-avx512
 
 # Verify binary
 RUN echo "=== Verifying ONNX AVX-512 binary ===" \
