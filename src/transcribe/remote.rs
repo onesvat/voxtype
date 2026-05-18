@@ -255,7 +255,7 @@ impl Transcriber for RemoteTranscriber {
         })?;
 
         // Extract text from response
-        let text = json
+        let raw_text = json
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
@@ -263,6 +263,13 @@ impl Transcriber for RemoteTranscriber {
             })?
             .trim()
             .to_string();
+
+        // Parse Qwen3-ASR output format: "language Turkish<asr_text>actual text"
+        let text = if let Some(pos) = raw_text.find("<asr_text>") {
+            raw_text[pos + 10..].trim().to_string()
+        } else {
+            raw_text
+        };
 
         tracing::info!(
             "Remote transcription completed in {:.2}s: {:?}",
